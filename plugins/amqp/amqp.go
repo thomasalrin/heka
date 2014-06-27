@@ -345,11 +345,19 @@ func (ao *AMQPOutput) Run(or OutputRunner, h PluginHelper) (err error) {
 			if !ok {
 				break
 			}
+                                //Megam change
+                                fmt.Println("====================> Megam test start ==========================>")
+                                fmt.Printf("%v\n", pack.Message)
+                                fmt.Println("====================> Megam test mid ==========================>")
+                                fmt.Printf("%s\n", pack.Message.GetLogger())
+                                fmt.Println("====================> Megam test End ==========================>")
+
 			if outBytes, err = encoder.Encode(pack); err != nil {
 				or.LogError(fmt.Errorf("Error encoding message: %s", err))
 				pack.Recycle()
 				continue
 			}
+                                
 			amqpMsg = amqp.Publishing{
 				DeliveryMode: persist,
 				Timestamp:    time.Now(),
