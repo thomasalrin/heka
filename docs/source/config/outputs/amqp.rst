@@ -14,6 +14,8 @@ Config:
     <http://www.rabbitmq.com/uri-spec.html>`_.
 - Exchange (string):
     AMQP exchange name
+- Queue (string):
+    AMQP queue name
 - ExchangeType (string):
     AMQP exchange type (`fanout`, `direct`, `topic`, or `headers`).
 - ExchangeDurability (bool):

@@ -144,6 +144,21 @@ type AMQPOutputConfig struct {
 	ContentType string
 	// Default the encoder
 	Encoder string
+//Megam change
+	Queue string
+	// Whether the queue is durable or not
+	// Defaults to non-durable
+	QueueDurability bool
+	// Whether the queue is exclusive or not
+	// Defaults to non-exclusive
+	QueueExclusive bool
+	// Whether the queue is deleted when the last consumer un-subscribes
+	// Defaults to auto-delete
+	QueueAutoDelete bool
+	// How long a message published to a queue can live before it is discarded (milliseconds).
+	// 0 is a valid ttl which mimics "immediate" expiration.
+	// Default value is -1 which leaves it undefined.
+	QueueTTL int32
 }
 
 // Connection tracker that stores the actual AMQP Connection object along
@@ -304,9 +319,15 @@ func (ao *AMQPOutput) Init(config interface{}) (err error) {
 	ao.usageWg = usageWg
 	closeChan := make(chan *amqp.Error)
 	ao.closeChan = ch.NotifyClose(closeChan)
+//Megam change
 	err = ch.ExchangeDeclare(conf.Exchange, conf.ExchangeType,
 		conf.ExchangeDurability, conf.ExchangeAutoDelete, false, false,
 		nil)
+
+        q_err = ch.QueueDeclare(conf.Queue, conf.QueueDurability,
+		conf.QueueAutoDelete, conf.QueueExclusive, false, nil)
+
+	q_bind = ch.QueueBind(conf.Queue, conf.RoutingKey, conf.Exchange, false, nil)
 	if err != nil {
 		usageWg.Done()
 		return
