@@ -297,6 +297,12 @@ func (ao *AMQPOutput) ConfigStruct() interface{} {
 		Persistent:         false,
 		Encoder:            "ProtobufEncoder",
 		ContentType:        "application/hekad",
+		Queue:              "",
+		QueueDurability:    false,
+		QueueExclusive:     false,
+		QueueAutoDelete:    true,
+		QueueTTL:           -1,
+	}
 	}
 }
 
