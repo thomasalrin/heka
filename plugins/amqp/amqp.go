@@ -327,14 +327,14 @@ func (ao *AMQPOutput) Init(config interface{}) (err error) {
 		usageWg.Done()
 		return
 	}
-        err = ch.QueueDeclare(conf.Queue, conf.QueueDurability,
+        err1 := ch.QueueDeclare(conf.Queue, conf.QueueDurability,
 		conf.QueueAutoDelete, conf.QueueExclusive, false, nil)
-	if err != nil {
+	if err1 != nil {
 		usageWg.Done()
 		return
 	}
-	err = ch.QueueBind(conf.Queue, conf.RoutingKey, conf.Exchange, false, nil)
-	if err != nil {
+	err2 := ch.QueueBind(conf.Queue, conf.RoutingKey, conf.Exchange, false, nil)
+	if err2 != nil {
 		usageWg.Done()
 		return
 	}
