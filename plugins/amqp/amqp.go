@@ -145,7 +145,7 @@ type AMQPOutputConfig struct {
 	// Default the encoder
 	Encoder string
 //Megam change
-	Queue string
+	Queue bool
 	// Whether the queue is durable or not
 	// Defaults to non-durable
 	QueueDurability bool
@@ -297,14 +297,13 @@ func (ao *AMQPOutput) ConfigStruct() interface{} {
 		Persistent:         false,
 		Encoder:            "ProtobufEncoder",
 		ContentType:        "application/hekad",
-		Queue:              "",
+		Queue:              false,
 		QueueDurability:    false,
 		QueueExclusive:     false,
 		QueueAutoDelete:    true,
 		QueueTTL:           -1,
 	}
 	}
-}
 
 func (ao *AMQPOutput) Init(config interface{}) (err error) {
 	conf := config.(*AMQPOutputConfig)
@@ -326,6 +325,7 @@ func (ao *AMQPOutput) Init(config interface{}) (err error) {
 	closeChan := make(chan *amqp.Error)
 	ao.closeChan = ch.NotifyClose(closeChan)
 //Megam change
+if !conf.Queue {
 	err = ch.ExchangeDeclare(conf.Exchange, conf.ExchangeType,
 		conf.ExchangeDurability, conf.ExchangeAutoDelete, false, false,
 		nil)
@@ -333,16 +333,7 @@ func (ao *AMQPOutput) Init(config interface{}) (err error) {
 		usageWg.Done()
 		return
 	}
-        err1 := ch.QueueDeclare(conf.Queue, conf.QueueDurability, conf.QueueAutoDelete, conf.QueueExclusive, false, nil)
-	if err1 != nil {
-		usageWg.Done()
-		return
-	}
-	err2 := ch.QueueBind(conf.Queue, conf.RoutingKey, conf.Exchange, false, nil)
-	if err2 != nil {
-		usageWg.Done()
-		return
-	}
+}
 	ao.ch = ch
 	return
 }
@@ -368,7 +359,6 @@ func (ao *AMQPOutput) Run(or OutputRunner, h PluginHelper) (err error) {
 	} else {
 		persist = uint8(0)
 	}
-
 	for ok {
 		select {
 		case <-ao.closeChan:
@@ -377,13 +367,47 @@ func (ao *AMQPOutput) Run(or OutputRunner, h PluginHelper) (err error) {
 			if !ok {
 				break
 			}
-                                //Megam change
-                                fmt.Println("====================> Megam test start ==========================>")
-                                fmt.Printf("%v\n", pack.Message)
-                                fmt.Println("====================> Megam test mid ==========================>")
-                                fmt.Printf("%s\n", pack.Message.GetLogger())
-                                fmt.Println("====================> Megam test End ==========================>")
 
+        if conf.Queue {
+        var tlsConf *tls.Config = nil
+	if strings.HasPrefix(conf.URL, "amqps://") && &ao.config.Tls != nil {
+		if tlsConf, err := tcp.CreateGoTlsConfig(&ao.config.Tls); err != nil {
+                        fmt.Println("%v", tlsConf)
+			return fmt.Errorf("TLS init error: %s", err)
+		}
+	}
+
+        var dialer = AMQPDialer{tlsConf}
+	ch, usageWg, connectionWg, err := amqpHub.GetChannel(conf.URL, dialer)
+	if err != nil {
+                fmt.Println("%v", connectionWg)
+		return errors.New("Failed to get channel.")
+	}
+                                //fmt.Println("====================> Megam test start ==========================>")
+                                //fmt.Printf("%v\n", pack.Message)
+                                //fmt.Printf("%s\n", pack.Message.GetLogger())
+                                //fmt.Printf("%v\n", conf.QueueDurability)
+
+        err = ch.ExchangeDeclare(pack.Message.GetLogger(), conf.ExchangeType,
+		conf.ExchangeDurability, conf.ExchangeAutoDelete, false, false,
+		nil)
+	if err != nil {
+		usageWg.Done()
+		return errors.New("Failed to declare Exchange.")
+	}
+
+        decl_q, err := ch.QueueDeclare(pack.Message.GetLogger(), conf.QueueDurability, conf.QueueAutoDelete, conf.QueueExclusive, false, nil)
+        fmt.Println("%v", decl_q)
+	if err != nil {
+		usageWg.Done()
+		return errors.New("Failed to declare queue.")
+	}
+	err = ch.QueueBind(pack.Message.GetLogger(), conf.RoutingKey, pack.Message.GetLogger(), false, nil)
+	if err != nil {
+		usageWg.Done()
+		return errors.New("Failed to bind queue.")
+	}
+        }
 			if outBytes, err = encoder.Encode(pack); err != nil {
 				or.LogError(fmt.Errorf("Error encoding message: %s", err))
 				pack.Recycle()
@@ -396,7 +420,7 @@ func (ao *AMQPOutput) Run(or OutputRunner, h PluginHelper) (err error) {
 				ContentType:  conf.ContentType,
 				Body:         outBytes,
 			}
-			err = ao.ch.Publish(conf.Exchange, conf.RoutingKey,
+			err = ao.ch.Publish(pack.Message.GetLogger(), conf.RoutingKey,
 				false, false, amqpMsg)
 			if err != nil {
 				ok = false
