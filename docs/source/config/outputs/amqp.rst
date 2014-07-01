@@ -14,6 +14,8 @@ Config:
     <http://www.rabbitmq.com/uri-spec.html>`_.
 - Exchange (string):
     AMQP exchange name
+- Queue (string):
+    AMQP queue name
 - ExchangeType (string):
     AMQP exchange type (`fanout`, `direct`, `topic`, or `headers`).
 - ExchangeDurability (bool):
@@ -36,6 +38,21 @@ Config:
      "application/hekad".
 - Encoder (string)
     Default to "ProtobufEncoder".
+
+- Queue (string):
+    Name of the queue to consume from, an empty string will have the broker
+    generate a name for the queue. Defaults to empty string.
+- QueueDurability (bool):
+    Whether the queue is durable or not. Defaults to non-durable.
+- QueueExclusive (bool):
+    Whether the queue is exclusive (only one consumer allowed) or not.
+    Defaults to non-exclusive.
+- QueueAutoDelete (bool):
+    Whether the queue is deleted when the last consumer un-subscribes.
+    Defaults to auto-delete.
+- QueueTTL (int):
+    Allows ability to specify TTL in milliseconds on Queue declaration for
+    expiring messages. Defaults to undefined/infinite.
 
 .. versionadded:: 0.6
 
