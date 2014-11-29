@@ -33,8 +33,7 @@ type BufferedOutput struct {
 	sentMessageCount   int64
 	readOffset         int64
 	parser             *MessageProtoParser
-	encoder            Encoder
-	isProtobufEncoder  bool
+	or                 OutputRunner
 	writeFile          *os.File
 	writeId            uint
 	readFile           *os.File
@@ -50,16 +49,14 @@ type BufferedOutputSender interface {
 	SendRecord(record []byte) (err error)
 }
 
-func NewBufferedOutput(queue_dir, queue_name string, encoder Encoder) (
+func NewBufferedOutput(queue_dir, queue_name string, or OutputRunner, h PluginHelper) (
 	*BufferedOutput, error) {
 
 	b := new(BufferedOutput)
-	b.encoder = encoder
-	if pbCheck, ok := encoder.(MightGenerateProtobuf); ok {
-		b.isProtobufEncoder = pbCheck.GeneratesProtobuf()
-	}
+	b.or = or
 	b.parser = NewMessageProtoParser()
-	b.queue = PrependBaseDir(filepath.Join(queue_dir, queue_name))
+	globals := h.PipelineConfig().Globals
+	b.queue = globals.PrependBaseDir(filepath.Join(queue_dir, queue_name))
 	b.checkpointFilename = filepath.Join(b.queue, "checkpoint.txt")
 	b.outBytes = make([]byte, 0, 1000) // encoding will reallocate the buffer as necessary
 
@@ -74,13 +71,12 @@ func NewBufferedOutput(queue_dir, queue_name string, encoder Encoder) (
 
 func (b *BufferedOutput) QueueRecord(pack *PipelinePack) (err error) {
 	var msgBytes []byte
-	if msgBytes, err = b.encoder.Encode(pack); err != nil {
+	if msgBytes, err = b.or.Encode(pack); msgBytes == nil || err != nil {
 		return
 	}
 
-	// ProtobufEncoder does the framing for us, otherwise we have to do it
-	// ourselves.
-	if b.isProtobufEncoder {
+	// If framing isn't already in place then we need to add it.
+	if b.or.UsesFraming() {
 		b.outBytes = msgBytes
 	} else {
 		if err = client.CreateHekaStream(msgBytes, &b.outBytes, nil); err != nil {
@@ -171,6 +167,10 @@ func (b *BufferedOutput) streamOutput(sender BufferedOutputSender, outputError,
 			b.readFile.Close()
 			b.readFile = nil
 		}
+		if b.writeFile != nil {
+			b.writeFile.Close()
+			b.writeFile = nil
+		}
 	}()
 
 	if err = b.readFromNextFile(); err != nil {
@@ -216,7 +216,8 @@ func (b *BufferedOutput) streamOutput(sender BufferedOutputSender, outputError,
 			}
 		} else {
 			if len(record) > 0 {
-				if !b.isProtobufEncoder {
+				// Remove the framing if we put it there.
+				if !b.or.UsesFraming() {
 					headerLen := int(record[1]) + message.HEADER_FRAMING_SIZE
 					record = record[headerLen:]
 				}

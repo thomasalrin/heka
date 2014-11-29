@@ -30,11 +30,12 @@ import (
 
 // Output plugin that sends messages via TCP using the Heka protocol.
 type TcpOutput struct {
+	processMessageCount int64
+	keepAliveDuration   time.Duration
 	conf                *TcpOutputConfig
 	address             string
 	localAddress        net.Addr
 	connection          net.Conn
-	processMessageCount int64
 	name                string
 	reportLock          sync.Mutex
 	bufferedOut         *BufferedOutput
@@ -52,11 +53,16 @@ type TcpOutputConfig struct {
 	// Interval at which the output queue logs will roll, in seconds. Defaults
 	// to 300.
 	TickerInterval uint `toml:"ticker_interval"`
-	Encoder        string
+	// Allows for a default encoder.
+	Encoder string
 	// Set to true if TCP Keep Alive should be used.
 	KeepAlive bool `toml:"keep_alive"`
 	// Integer indicating seconds between keep alives.
 	KeepAlivePeriod int `toml:"keep_alive_period"`
+	// Specifies whether or not Heka's stream framing wil be applied to the
+	// output. We do some magic to default to true if ProtobufEncoder is used,
+	// false otherwise.
+	UseFraming *bool `toml:"use_framing"`
 }
 
 func (t *TcpOutput) ConfigStruct() interface{} {
@@ -85,6 +91,9 @@ func (t *TcpOutput) Init(config interface{}) (err error) {
 		t.localAddress, err = net.ResolveTCPAddr("tcp", t.conf.LocalAddress)
 	}
 
+	if t.conf.KeepAlivePeriod != 0 {
+		t.keepAliveDuration = time.Duration(t.conf.KeepAlivePeriod) * time.Second
+	}
 	return
 }
 
@@ -109,7 +118,9 @@ func (t *TcpOutput) connect() (err error) {
 			t.or.LogError(fmt.Errorf("KeepAlive only supported for TCP Connections."))
 		} else {
 			tcpConn.SetKeepAlive(t.conf.KeepAlive)
-			tcpConn.SetKeepAlivePeriod(time.Duration(t.conf.KeepAlivePeriod) * time.Second)
+			if t.keepAliveDuration != 0 {
+				tcpConn.SetKeepAlivePeriod(t.keepAliveDuration)
+			}
 		}
 	}
 	return
@@ -155,6 +166,13 @@ func (t *TcpOutput) Run(or OutputRunner, h PluginHelper) (err error) {
 		stopChan    = make(chan bool, 1)
 	)
 
+	if t.conf.UseFraming == nil {
+		// Nothing was specified, we'll default to framing IFF ProtobufEncoder
+		// is being used.
+		if _, ok := or.Encoder().(*ProtobufEncoder); ok {
+			or.SetUseFraming(true)
+		}
+	}
 	t.or = or
 
 	defer func() {
@@ -164,7 +182,7 @@ func (t *TcpOutput) Run(or OutputRunner, h PluginHelper) (err error) {
 		}
 	}()
 
-	t.bufferedOut, err = NewBufferedOutput("output_queue", t.name, or.Encoder())
+	t.bufferedOut, err = NewBufferedOutput("output_queue", t.name, or, h)
 	if err != nil {
 		return
 	}

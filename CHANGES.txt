@@ -1,8 +1,257 @@
-0.6.0 (2014-??-??)
+0.8.1 (2014-MM-DD)
+==================
+
+Bug Handling
+------------
+
+* Fix leaky file descriptor bug on http_output.go.
+
+* Only stamp PipelinePack diagnostics in cases when a pack actually matches a
+  message matcher, instead of for every matcher every time (#1167).
+
+* StatsdInput allows to specify (via max_msg_size option) size of message read
+  from UDP (#1165).
+
+* AMQPOutput now recycles packs even when a publish error causes the output to
+  exit / restart (#1178).
+
+* Fixed HttpOutput TLS section parsing (#1163).
+
+0.8.0 (2014-10-29)
 ==================
 
 Backwards Incompatibilities
 ---------------------------
+
+* Audited the use of Logger and Type headers on internal message (#1024). These
+  changes may break some existing message matchers with regards to
+  plugin/sandbox termination messages.
+
+* Sandbox decoder linux_cpustats has been renamed to linux_loadavg and the
+  corresponding filter cpustats was renamed to loadavg (#1094).
+
+* ESLogstashv0 encoder will now set the @type field to match the ES record
+  type specified in the `type_name` setting. This is Logstash behaviour in
+  V0. You can revert back to the old method with `use_message_type = true`
+
+Bug Handling
+------------
+
+* linux_diskstats.lua will now parse a line with no leading space (#1141).
+
+* Protect globals.Stopping with a RWMutex.
+
+* Added support for `fields` config setting to ESLogstashV0Encoder; it was
+  already documented, but hadn't been implemented (#1096).
+
+* Fixed deadlock race condition in AMQPOutput shutdown sequence (#824).
+
+Features
+--------
+
+* Optimized prefix/suffix testing in the message matcher (#1040).
+
+* LogstreamerInput now supports seekjournal file hashing for files that are
+  less than 500 bytes in length; hash is generated against file contents with
+  0 bytes prepended to make 500 bytes of hash content (#972).
+
+* Support environment variables in config files (#1023).
+
+* Add Dockerfiles and example Docker usage to repo
+
+* Encoders can now return (nil, nil) to express that they've swallowed the
+  input message without generating any output.
+
+* SandboxEncoder now supports return value of -2 from the process_message call
+  to specify that no output is being generated.
+
+* Added schema_influx.lua encoder.
+
+* Added CBUF Librato Encoder.
+
+* Added option to disable re-using TCP connections to the ElasticSearch output
+
+* Added separate env loading file and support for NUM_JOBS env var to Windows
+  build (#971).
+
+* Added DockerLogInput (issue #1092).
+
+* Added support for "Epoch", "EpochMilli", "EpochMicro", and "EpochNano"
+  timestamp formats to the time parsing code used by the Payload*Decoder
+  plugins (#963).
+
+0.7.3 (2014-10-28)
+==================
+
+Bug Handling
+------------
+
+* Fail gracefully on LogstreamerInput missing `file_match` setting (#1105).
+
+* Fixed issue where ProcessInput wasn't propagating environment variables and
+  working directory to repeatedly run (vs. one time, long running) processes
+  (#1108).
+
+* UdpInput now removes a Unix datagram socket file at shutdown time if one is
+  created at startup.
+
+* Fixed issue with keeping previous EOF state in LogStreamer (#1119).
+
+* ProcessInput now honors documented restart behavior (#1117).
+
+0.7.2 (2014-10-01)
+==================
+
+Bug Handling
+------------
+
+* Fail more gracefully if user doesn't specify a scheme in the server URL for
+  the ElasticSearchOutput (#1069).
+
+* Correctly compute http timeout interval for ElasticSearchOutput when using
+  HTTP indexing.
+
+* Fixed issue w/ inaccurate payload sizes in heka-flood.
+
+* Allow severity to be modified by the MessageTemplate logic for use in
+  ScribbleDecoder (#1084).
+
+* Render pack diagnostic idle time in seconds (as specified) instead of
+  nanoseconds.
+
+* Prevent orphaned matchers from remaining in the router's matcher lists in
+  cases where a filter or output registered in one TOML file overrides a
+  filter or output of the same name in an earlier TOML file.
+
+0.7.1 (2014-09-02)
+==================
+
+Bug Handling
+------------
+
+* Fixed handling of TcpInput and TcpOutput keep_alive_period default value
+  handling, and added docs (#1054).
+
+* Fixed OSX lua_sandbox build error.
+
+* Fixed load ordering of nested MultiDecoders (#1045).
+
+0.7.0 (2014-08-27)
+==================
+
+Backwards Incompatibilities
+---------------------------
+
+* Switched to using fork of gomock, import location changed from
+  `code.google.com/p/gomock` to `github.com/rafrombrc/gomock`.
+
+* Move *GlobalConfigStruct out of pipeline package's global namespace, it is
+  now stored as an attribute on PipelineConfig. Any code that used to call
+  pipeline.Globals() now must instead access *PipelineConfig.Globals. The
+  `WantsPipelineConfig` interface has been introduced to give plugins access
+  to the active *PipelineConfig if it's needed in the ConfigStruct or Init
+  methods (#951).
+
+* Removed deprecated `pipeline.GetHekaConfigDir` API call, which has been
+  replaced by `PrependBaseDir` and `PrependShareDir` for a few versions
+  now.
+
+* Removed the regular expression template support from the message matcher
+  (issue #960).
+
+* Updated the AMQP input / output configuration values to use underscore
+  delimited words for long config options (issue #953).
+
+* LogstreamerInput now errors on nonexistent `log_directory` instead of
+  creating the folder (issue #1066).
+
+Bug Handling
+------------
+
+* Fixed the MySQL slow query grammar to handle logs with no newline.
+
+* Fixed packet tracking idle packs error output formatting.
+
+* Prevent panics during shutdown when a restarting plugin has been restarted
+  (issue #957).
+
+* Added support for a Logstreamer symbolically linked log_directory root
+  (issue #741).
+
+* Fixed lots of race conditions in the tests.
+
+* Eliminated race condition in use of global AMQPHub in AMQP input / output
+  plugins (#953).
+
+Features
+--------
+
+* Added StatMetric Influx Encoder.
+
+* Added RstEncoder.
+
+* Added support for '__ignore_root' tag in add_external_plugin to allow
+  external packages to be added which do not have any .go files
+  in their root directory (issue #955).
+
+* Switched from using goprotobuf to gogoprotobuf with marshal_all and
+  unmarshal_all extensions for significant performance increase.
+
+* Added stats graph sandbox filter to make it easier to generate graphs of
+  statsd / graphite metrics (issue #966).
+
+* Added support for the majority of repository URI formats when cloning external
+  Go packages (issue #937).
+
+* Added the ability to test for field existence in message matcher (issue #958).
+
+* Added support to ESJSonEncoder and ESLogstashV0Encoder to properly encode
+  field arrays.
+
+* Added a filter to monitor all process message failures (issue #948).
+
+* Added UdpOutput.
+
+* Added IrcOutput.
+
+* Added support for filter and output plugins to optionally exit without
+  causing Heka to shutdown via config option.
+
+* Added support for custom HTTP Headers in HttpListenInput and DashboardOutput.
+
+0.6.1 (2014-08-27)
+==================
+
+Bug Handling
+------------
+
+* CarbonOutput using UDP transport now uses multiple packets to send stats
+  data to Carbon server when output would be longer than the 64KiB max size
+  for UDP packets (issue #1035).
+
+* StatsdInput now trims all whitespace around incoming stat names instead of
+  just trailing newlines (issue #1011).
+
+* Fixed silent failures in ElasticSearchOutput bulk indexing operations.
+
+* Fixed permanent loss of HTTP connection in certain cases when ElasticSearch
+  has been restarted (issue #1008).
+
+* Fixed default sandbox script type when loading dynamic plugins.
+
+0.6.0 (2014-07-09)
+==================
+
+Backwards Incompatibilities
+---------------------------
+
+* Go 1.3 now required for building.
+
+* Changed handling of message stream framing. Before stream framing was
+  presumed to always be required when encoding with protocol buffers, and not
+  required when using other encodings. Now all outputs support an optional
+  `use_framing` setting that will determine whether or not framing will be
+  applied when using the OutputRunner's Encode method (issue #922).
 
 * All files in a config directory that do not end in ".toml" will now be
   ignored and not loaded as a part of the Heka configuration (issue #750).
@@ -44,6 +293,9 @@ Backwards Incompatibilities
 Bug Handling
 ------------
 
+* Fixed the ElasticSearchOutput to always use UTC times in the bulk API header
+  (issue #504).
+
 * Fixed the SandboxDecoder panic when failing the Decode() after successfully
   injecting a message (issue #910).
 
@@ -75,8 +327,13 @@ Bug Handling
 
 * Fix file_match config of plugin logstreamer_input (issue #893).
 
+* StatFilter now correctly handles values from integer or float fields (issue
+  #612).
+
 Features
 --------
+
+* Added general purpose HttpOutput (issue #820).
 
 * Added message processing stat reporting to the MultiDecoder for each
   subdecoder and in aggregate (issue #719).
@@ -140,17 +397,6 @@ Features
 * Add detection and handling of gzipped files to LogstreamerInput (issue #648).
 
 * Added optional TCP Keep-Alive parameters to TcpInput/TcpOutput plugins.
-
-* Added include_framing option to ProtobufEncoder to optionally disable framing (issue #902).
-
-0.5.3 (2014-MM-DD)
-==================
-
-Bug Handling
-------------
-
-* StatFilter now correctly handles values from integer or float fields (issue
-  #612).
 
 0.5.2 (2014-05-16)
 ==================
@@ -223,10 +469,10 @@ Backwards Incompatibilities
 * Removed Stdout_chan and Stderr_chan from ManagedCmd and CommandChain, client
   code now has direct access to Stdout_r and Stderr_r io.Reader providers.
 
-* The PluginHelper interface DecoderRunner prototype has changed (issue #717) 
+* The PluginHelper interface DecoderRunner prototype has changed (issue #717)
   to allow for the base name e.g. "ProtobufDecoder" and a full instance name
   e.g. "MyInput-ProtobufDecoder" of the decoder to be specified.  This allows
-  multiple decoders of the same type to show up on the DashboardOutput and 
+  multiple decoders of the same type to show up on the DashboardOutput and
   sandbox decoder state preservation to work properly. Also the DecoderRunner
   UUID interface method was removed.
 

@@ -23,7 +23,6 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
@@ -37,13 +36,13 @@ type ElasticSearchOutput struct {
 	flushCount    int
 	batchChan     chan []byte
 	backChan      chan []byte
-	encoder       Encoder
 	// The BulkIndexer used to index documents
 	bulkIndexer BulkIndexer
 
 	// Specify a timeout value in milliseconds for bulk request to complete.
 	// Default is 0 (infinite)
 	http_timeout uint32
+	http_disable_keepalives bool
 }
 
 // ConfigStruct for ElasticSearchOutput plugin.
@@ -63,6 +62,7 @@ type ElasticSearchOutputConfig struct {
 	Server string
 	// Timeout
 	HTTPTimeout uint32 `toml:"http_timeout"`
+	HTTPDisableKeepalives bool `toml:"http_disable_keepalives"`
 }
 
 func (o *ElasticSearchOutput) ConfigStruct() interface{} {
@@ -71,6 +71,7 @@ func (o *ElasticSearchOutput) ConfigStruct() interface{} {
 		FlushCount:    10,
 		Server:        "http://localhost:9200",
 		HTTPTimeout:   0,
+		HTTPDisableKeepalives: false,
 	}
 }
 
@@ -81,13 +82,17 @@ func (o *ElasticSearchOutput) Init(config interface{}) (err error) {
 	o.batchChan = make(chan []byte)
 	o.backChan = make(chan []byte, 2)
 	o.http_timeout = conf.HTTPTimeout
-	if serverUrl, err := url.Parse(conf.Server); err == nil {
+	o.http_disable_keepalives = conf.HTTPDisableKeepalives
+	var serverUrl *url.URL
+	if serverUrl, err = url.Parse(conf.Server); err == nil {
 		switch strings.ToLower(serverUrl.Scheme) {
 		case "http", "https":
 			o.bulkIndexer = NewHttpBulkIndexer(strings.ToLower(serverUrl.Scheme), serverUrl.Host,
-				o.flushCount, o.http_timeout)
+				o.flushCount, o.http_timeout, o.http_disable_keepalives)
 		case "udp":
 			o.bulkIndexer = NewUDPBulkIndexer(serverUrl.Host, o.flushCount)
+		default:
+			err = errors.New("Server URL must specify one of `udp`, `http`, or `https`.")
 		}
 	} else {
 		err = fmt.Errorf("Unable to parse ElasticSearch server URL [%s]: %s", conf.Server, err)
@@ -96,13 +101,13 @@ func (o *ElasticSearchOutput) Init(config interface{}) (err error) {
 }
 
 func (o *ElasticSearchOutput) Run(or OutputRunner, h PluginHelper) (err error) {
-	if o.encoder = or.Encoder(); o.encoder == nil {
+	if or.Encoder() == nil {
 		return errors.New("Encoder must be specified.")
 	}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go o.receiver(or, &wg)
-	go o.committer(&wg)
+	go o.committer(or, &wg)
 	wg.Wait()
 	return
 }
@@ -133,11 +138,11 @@ func (o *ElasticSearchOutput) receiver(or OutputRunner, wg *sync.WaitGroup) {
 				close(o.batchChan)
 				break
 			}
-			outBytes, e = o.encoder.Encode(pack)
+			outBytes, e = or.Encode(pack)
 			pack.Recycle()
 			if e != nil {
 				or.LogError(e)
-			} else {
+			} else if outBytes != nil {
 				outBatch = append(outBatch, outBytes...)
 				if count = count + 1; o.bulkIndexer.CheckFlush(count, len(outBatch)) {
 					if len(outBatch) > 0 {
@@ -165,13 +170,15 @@ func (o *ElasticSearchOutput) receiver(or OutputRunner, wg *sync.WaitGroup) {
 // Runs in a separate goroutine, waits for buffered data on the committer
 // channel, bulk index it out to the elasticsearch cluster, and puts the now
 // empty buffer on the return channel for reuse.
-func (o *ElasticSearchOutput) committer(wg *sync.WaitGroup) {
+func (o *ElasticSearchOutput) committer(or OutputRunner, wg *sync.WaitGroup) {
 	initBatch := make([]byte, 0, 10000)
 	o.backChan <- initBatch
 	var outBatch []byte
 
 	for outBatch = range o.batchChan {
-		o.bulkIndexer.Index(outBatch)
+		if err := o.bulkIndexer.Index(outBatch); err != nil {
+			or.LogError(err)
+		}
 		outBatch = outBatch[:0]
 		o.backChan <- outBatch
 	}
@@ -181,7 +188,7 @@ func (o *ElasticSearchOutput) committer(wg *sync.WaitGroup) {
 // A BulkIndexer is used to index documents in ElasticSearch
 type BulkIndexer interface {
 	// Index documents
-	Index(body []byte) (success bool, err error)
+	Index(body []byte) error
 	// Check if a flush is needed
 	CheckFlush(count int, length int) bool
 }
@@ -189,22 +196,33 @@ type BulkIndexer interface {
 // A HttpBulkIndexer uses the HTTP REST Bulk Api of ElasticSearch
 // in order to index documents
 type HttpBulkIndexer struct {
-	// Protocol (http or https)
+	// Protocol (http or https).
 	Protocol string
-	// Host name and port number (default to "localhost:9200")
+	// Host name and port number (default to "localhost:9200").
 	Domain string
-	// Maximum number of documents
+	// Maximum number of documents.
 	MaxCount int
-	// Internal HTTP Client
-	clientConn *httputil.ClientConn
-	// TCP Connection for HTTP client
-	tcpConn net.Conn
-	// Timeout in milliseconds for HTTP post
-	HTTPTimeout uint32
+	// Internal HTTP Client.
+	client *http.Client
 }
 
-func NewHttpBulkIndexer(protocol string, domain string, maxCount int, http_timeout uint32) *HttpBulkIndexer {
-	return &HttpBulkIndexer{Protocol: protocol, Domain: domain, MaxCount: maxCount, HTTPTimeout: http_timeout}
+func NewHttpBulkIndexer(protocol string, domain string, maxCount int,
+	httpTimeout uint32, httpDisableKeepalives bool) *HttpBulkIndexer {
+
+	tr := &http.Transport {
+		DisableKeepAlives: httpDisableKeepalives,
+	}
+
+	client := &http.Client{
+		Transport: tr,
+		Timeout: time.Duration(httpTimeout) * time.Millisecond,
+	}
+	return &HttpBulkIndexer{
+		Protocol: protocol,
+		Domain:   domain,
+		MaxCount: maxCount,
+		client:   client,
+	}
 }
 
 func (h *HttpBulkIndexer) CheckFlush(count int, length int) bool {
@@ -214,49 +232,29 @@ func (h *HttpBulkIndexer) CheckFlush(count int, length int) bool {
 	return false
 }
 
-func (h *HttpBulkIndexer) Index(body []byte) (success bool, err error) {
-	if h.clientConn == nil {
-		h.tcpConn, _ = net.Dial("tcp", h.Domain)
-		h.clientConn = httputil.NewClientConn(h.tcpConn, nil)
-	}
+func (h *HttpBulkIndexer) Index(body []byte) error {
 	url := fmt.Sprintf("%s://%s%s", h.Protocol, h.Domain, "/_bulk")
 
 	// Creating ElasticSearch Bulk HTTP request
-	if request, err := http.NewRequest("POST", url, bytes.NewReader(body)); err != nil {
-		err = fmt.Errorf("Error creating bulk request: %s", err)
-		return false, err
-	} else {
-		request.Header.Add("Accept", "application/json")
-		if h.HTTPTimeout != 0 {
-			h.tcpConn.SetDeadline(time.Now().Add(time.Duration(h.HTTPTimeout) * time.Millisecond))
+	request, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("can't create bulk request: %s", err.Error())
+	}
+	request.Header.Add("Accept", "application/json")
+	response, err := h.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("HTTP request failed: %s", err.Error())
+	}
+	if response != nil {
+		defer response.Body.Close()
+		if response.StatusCode > 304 {
+			return fmt.Errorf("HTTP response error status: %s", response.Status)
 		}
-		response, err := h.clientConn.Do(request)
-
-		if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-			//Post timed out. Close connection.
-			h.clientConn.Close()
-			h.clientConn = nil
-			err = fmt.Errorf("Bulk post connection has timed out: %s", err)
-			return false, err
-		}
-
-		if err != nil {
-			err = fmt.Errorf("Error executing bulk request: %s", err)
-			return false, err
-		}
-		if response != nil {
-			defer response.Body.Close()
-			if response.StatusCode > 304 {
-				err = fmt.Errorf("Bulk response in error: %s", response.Status)
-				return false, err
-			}
-			if _, err = ioutil.ReadAll(response.Body); err != nil {
-				err = fmt.Errorf("Bulk bulk response reading in error: %s", err)
-				return false, err
-			}
+		if _, err = ioutil.ReadAll(response.Body); err != nil {
+			return fmt.Errorf("can't read HTTP response body: %s", err.Error())
 		}
 	}
-	return true, nil
+	return nil
 }
 
 // A UDPBulkIndexer uses the Bulk UDP Api of ElasticSearch
@@ -287,29 +285,26 @@ func (u *UDPBulkIndexer) CheckFlush(count int, length int) bool {
 	return false
 }
 
-func (u *UDPBulkIndexer) Index(body []byte) (success bool, err error) {
+func (u *UDPBulkIndexer) Index(body []byte) error {
+	var err error
 	if u.address == nil {
 		if u.address, err = net.ResolveUDPAddr("udp", u.Domain); err != nil {
-			err = fmt.Errorf("Error resolving UDP address [%s]: %s", u.Domain, err)
-			return false, err
+			return fmt.Errorf("Error resolving UDP address [%s]: %s", u.Domain, err)
 		}
 	}
 	if u.client == nil {
 		if u.client, err = net.DialUDP("udp", nil, u.address); err != nil {
-			err = fmt.Errorf("Error creating UDP client: %s", err)
-			return false, err
+			return fmt.Errorf("Error creating UDP client: %s", err)
 		}
 	}
 	if u.address != nil {
 		if _, err = u.client.Write(body[:]); err != nil {
-			err = fmt.Errorf("Error writing data to UDP server: %s", err)
-			return false, err
+			return fmt.Errorf("Error writing data to UDP server: %s", err)
 		}
 	} else {
-		err = fmt.Errorf("Error writing data to UDP server, address not found")
-		return false, err
+		return fmt.Errorf("Error writing data to UDP server, address not found")
 	}
-	return true, nil
+	return nil
 }
 
 func init() {

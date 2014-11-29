@@ -26,6 +26,14 @@ processing, useful for a wide variety of different tasks, such as:
 
 * Delivering processed data to one or more persistent data stores.
 
+The following resources are available to those who would like to ask
+questions, report problems, or learn more:
+
+* Mailing List: https://mail.mozilla.org/listinfo/heka
+* Issue Tracker: https://github.com/mozilla-services/heka/issues
+* Github Project: https://github.com/mozilla-services/heka/
+* IRC: #heka channel on irc.mozilla.org
+
 Heka is a heavily plugin based system. There are five different types of Heka
 plugins:
 
@@ -86,7 +94,9 @@ plugins can be found in the :ref:`sandbox` section.
 
 .. end-description
 
-.. start-hekad:
+
+
+.. start-hekad
 
 hekad
 =====
@@ -111,12 +121,15 @@ hekad Command Line Options
 
 .. end-options
 
+.. end-hekad
+
 Contents:
 
 .. toctree::
    :maxdepth: 2
 
    installing
+   getting_started
    config/index
    config/inputs/index
    config/decoders/index
@@ -126,11 +139,23 @@ Contents:
    monitoring/index
    developing/plugin
    message/index
-   message_matcher.rst
+   message_matcher
    sandbox/index
    developing/testing
    tls
 
+.. toctree::
+   :hidden:
+
+   changelog
+   glossary
+   sandbox/graph_annotation
+   sandbox/json_payload_transform
+   config/common_sandbox_parameter
+   pluginconfig/logstreamer
+   man/config
+   man/plugin
+   man/usage
 
 
 Indices and tables
@@ -138,3 +163,4 @@ Indices and tables
 
 * :ref:`search`
 * :ref:`glossary`
+* :ref:`changelog`

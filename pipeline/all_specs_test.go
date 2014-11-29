@@ -36,7 +36,9 @@ func TestAllSpecs(t *testing.T) {
 	r := gospec.NewRunner()
 	r.Parallel = false
 
+	r.AddSpec(BufferedOutputSpec)
 	r.AddSpec(InputRunnerSpec)
+	r.AddSpec(MessageTemplateSpec)
 	r.AddSpec(OutputRunnerSpec)
 	r.AddSpec(ProtobufDecoderSpec)
 	r.AddSpec(ReportSpec)

@@ -20,6 +20,14 @@ initialization code.
 - ticker_interval (uint, optional):
     Frequency (in seconds) that a timer event will be sent to the filter.
     Defaults to not sending timer events.
+- encoder (string, optional):
+    Encoder to be used by the output. This should refer to the name of an
+    encoder plugin section that is specified elsewhere in the TOML
+    configuration. Messages can be encoded using the specified encoder by
+    calling the OutputRunner's `Encode()` method.
+- use_framing (bool, optional):
+    Specifies whether or not Heka's :ref:`stream_framing` should be applied to
+    the binary data returned from the OutputRunner's `Encode()` method.
 
 .. include:: /config/outputs/amqp.rst
 
@@ -31,6 +39,10 @@ initialization code.
 
 .. include:: /config/outputs/file.rst
 
+.. include:: /config/outputs/http.rst
+
+.. include:: /config/outputs/irc.rst
+
 .. include:: /config/outputs/log.rst
 
 .. include:: /config/outputs/nagios.rst
@@ -38,5 +50,7 @@ initialization code.
 .. include:: /config/outputs/smtp.rst
 
 .. include:: /config/outputs/tcp.rst
+
+.. include:: /config/outputs/udp.rst
 
 .. include:: /config/outputs/whisper.rst

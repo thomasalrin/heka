@@ -23,6 +23,11 @@ initialization code.
 - ticker_interval (uint, optional):
     Frequency (in seconds) that a timer event will be sent to the filter.
     Defaults to not sending timer events.
+- can_exit (bool, optional)
+    .. versionadded:: 0.7
+    
+    Whether or not this plugin can exit without causing Heka to shutdown.
+    Defaults to false for non-sandbox filters, and true for sandbox filters.
 
 .. _config_circular_buffer_delta_agg_filter:
 
@@ -30,7 +35,6 @@ Circular Buffer Delta Aggregator
 ================================
 
 .. versionadded:: 0.5
-
 .. include:: /../../sandbox/lua/filters/cbufd_aggregator.lua
    :start-after: --[[
    :end-before: --]]
@@ -41,7 +45,6 @@ CBuf Delta Aggregator By Hostname
 =================================
 
 .. versionadded:: 0.5
-
 .. include:: /../../sandbox/lua/filters/cbufd_host_aggregator.lua
    :start-after: --[[
    :end-before: --]]
@@ -50,13 +53,22 @@ CBuf Delta Aggregator By Hostname
 
 .. include:: /config/filters/counter.rst
 
+.. _config_disk_stats_filter:
+
+Disk Stats Filter
+=================
+
+.. versionadded:: 0.7
+.. include:: /../../sandbox/lua/filters/diskstats.lua
+   :start-after: --[[
+   :end-before: --]]
+
 .. _config_frequent_items_filter:
 
 Frequent Items
 ==============
 
 .. versionadded:: 0.5
-
 .. include:: /../../sandbox/lua/filters/frequent_items.lua
    :start-after: --[[
    :end-before: --]]
@@ -67,7 +79,6 @@ Heka Memory Statistics
 ======================
 
 .. versionadded:: 0.6
-
 .. include:: /../../sandbox/lua/filters/heka_memstat.lua
    :start-after: --[[
    :end-before: --]]
@@ -78,8 +89,17 @@ Heka Message Schema
 ===================
 
 .. versionadded:: 0.5
-
 .. include:: /../../sandbox/lua/filters/heka_message_schema.lua
+   :start-after: --[[
+   :end-before: --]]
+
+.. _config_process_message_failures_filter:
+
+Heka Process Message Failures
+=============================
+
+.. versionadded:: 0.7
+.. include:: /../../sandbox/lua/filters/heka_process_message_failures.lua
    :start-after: --[[
    :end-before: --]]
 
@@ -89,8 +109,27 @@ HTTP Status Graph
 =================
 
 .. versionadded:: 0.5
-
 .. include:: /../../sandbox/lua/filters/http_status.lua
+   :start-after: --[[
+   :end-before: --]]
+
+.. _config_load_avg_filter:
+
+Load Average Filter
+===================
+
+.. versionadded:: 0.7
+.. include:: /../../sandbox/lua/filters/loadavg.lua
+   :start-after: --[[
+   :end-before: --]]
+
+.. _config_mem_stats_filter:
+
+Memory Stats Filter
+===================
+
+.. versionadded:: 0.7
+.. include:: /../../sandbox/lua/filters/memstats.lua
    :start-after: --[[
    :end-before: --]]
 
@@ -100,7 +139,6 @@ MySQL Slow Query
 ================
 
 .. versionadded:: 0.6
-
 .. include:: /../../sandbox/lua/filters/mysql_slow_query.lua
    :start-after: --[[
    :end-before: --]]
@@ -114,13 +152,22 @@ MySQL Slow Query
 .. _config_sandbox_manager_filter:
 .. include:: /config/filters/sandboxmanager.rst
 
+.. _config_stats_graph_filter:
+
+Stats Graph
+===========
+
+.. versionadded:: 0.7
+.. include:: /../../sandbox/lua/filters/stat_graph.lua
+   :start-after: --[[
+   :end-before: --]]
+
 .. _config_unique_items_filter:
 
 Unique Items
 ============
 
 .. versionadded:: 0.6
-
 .. include:: /../../sandbox/lua/filters/unique_items.lua
    :start-after: --[[
    :end-before: --]]

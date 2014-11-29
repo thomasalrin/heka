@@ -19,6 +19,12 @@ Circular Buffer Delta Aggregator (by hostname)
    :start-after: --[[
    :end-before: --]]
 
+Disk Stats Filter
+-----------------
+.. include:: /../../sandbox/lua/filters/diskstats.lua
+   :start-after: --[[
+   :end-before: --]]
+
 Frequent Items
 --------------
 .. include:: ../../../sandbox/lua/filters/frequent_items.lua
@@ -37,9 +43,39 @@ Heka Message Schema (Message Documentation)
    :start-after: --[[
    :end-before: --]]
 
+Heka Process Message Failures (self monitoring)
+-----------------------------------------------
+.. include:: ../../../sandbox/lua/filters/heka_process_message_failures.lua
+   :start-after: --[[
+   :end-before: --]]
+
 HTTP Status Graph
 -----------------
 .. include:: ../../../sandbox/lua/filters/http_status.lua
+   :start-after: --[[
+   :end-before: --]]
+
+Load Average Filter
+-------------------
+.. include:: /../../sandbox/lua/filters/loadavg.lua
+   :start-after: --[[
+   :end-before: --]]
+
+Memory Stats Filter
+-------------------
+.. include:: /../../sandbox/lua/filters/memstats.lua
+   :start-after: --[[
+   :end-before: --]]
+
+MySQL Slow Query
+----------------
+.. include:: /../../sandbox/lua/filters/mysql_slow_query.lua
+   :start-after: --[[
+   :end-before: --]]
+
+Stats Graph
+-----------
+.. include:: ../../../sandbox/lua/filters/stat_graph.lua
    :start-after: --[[
    :end-before: --]]
 

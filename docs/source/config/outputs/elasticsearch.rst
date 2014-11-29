@@ -7,9 +7,9 @@ database. Note that it is up to the specified encoder to both serialize the
 message into a JSON structure *and* to prepend that with the appropriate
 ElasticSearch `BulkAPI
 <http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/docs-
-bulk.html>`_ indexing JSON. Usually this output is used in conjunction with
-one of the ElasticSearch-specific encoder plugins, such as
-:ref:`config_esjsonencoder` or :ref:`config_eslogstashv0encoder`.
+bulk.html>`_ indexing JSON. Usually this output is used in conjunction with an
+ElasticSearch-specific encoder plugin, such as :ref:`config_esjsonencoder`,
+:ref:`config_eslogstashv0encoder`, or :ref:`config_espayload`.
 
 Config:
 
@@ -25,6 +25,11 @@ Config:
 - http_timeout (int):
     Time in milliseconds to wait for a response for each http post to ES. This
     may drop data as there is currently no retry. Default is 0 (no timeout).
+- http_disable_keepalives (bool):
+    Specifies whether or not re-using of established TCP connections to
+    ElasticSearch should be disabled. Defaults to false, that means using
+    both HTTP keep-alive mode and TCP keep-alives. Set it to true to close
+    each TCP connection after 'flushing' messages to ElasticSearch.
 
 Example:
 

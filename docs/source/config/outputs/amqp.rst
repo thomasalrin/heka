@@ -1,4 +1,3 @@
-
 AMQPOutput
 ==========
 
@@ -9,35 +8,58 @@ programmable, the broker topology needs to be specified.
 
 Config:
 
-- URL (string):
+- url (string):
     An AMQP connection string formatted per the `RabbitMQ URI Spec
     <http://www.rabbitmq.com/uri-spec.html>`_.
-- Exchange (string):
+- exchange (string):
     AMQP exchange name
-- Queue (string):
+- queue (string):
     AMQP queue name
-- ExchangeType (string):
+- exchange_type (string):
     AMQP exchange type (`fanout`, `direct`, `topic`, or `headers`).
-- ExchangeDurability (bool):
+- exchange_durability (bool):
     Whether the exchange should be configured as a durable exchange. Defaults
     to non-durable.
-- ExchangeAutoDelete (bool):
+- exchange_auto_delete (bool):
     Whether the exchange is deleted when all queues have finished and there
     is no publishing. Defaults to auto-delete.
-- RoutingKey (string):
+- routing_key (string):
     The message routing key used to bind the queue to the exchange. Defaults
     to empty string.
-- Persistent (bool):
+- persistent (bool):
     Whether published messages should be marked as persistent or transient.
     Defaults to non-persistent.
+- retries (RetryOptions, optional):
+    A sub-section that specifies the settings to be used for restart behavior.
+    See :ref:`configuring_restarting`
 
 .. versionadded:: 0.6
 
-- ContentType (string):
+- content_type (string):
      MIME content type of the payload used in the AMQP header. Defaults to
      "application/hekad".
-- Encoder (string)
-    Default to "ProtobufEncoder".
+- encoder (string, optional)
+    Specifies which of the registered encoders should be used for converting
+    Heka messages to binary data that is sent out over the AMQP connection.
+    Defaults to the always available "ProtobufEncoder".
+- use_framing (bool, optional):
+    Specifies whether or not the encoded data sent out over the TCP connection
+    should be delimited by Heka's :ref:`stream_framing`. Defaults to true.
+
+- Queue (string):
+    Name of the queue to consume from, an empty string will have the broker
+    generate a name for the queue. Defaults to empty string.
+- QueueDurability (bool):
+    Whether the queue is durable or not. Defaults to non-durable.
+- QueueExclusive (bool):
+    Whether the queue is exclusive (only one consumer allowed) or not.
+    Defaults to non-exclusive.
+- QueueAutoDelete (bool):
+    Whether the queue is deleted when the last consumer un-subscribes.
+    Defaults to auto-delete.
+- QueueTTL (int):
+    Allows ability to specify TTL in milliseconds on Queue declaration for
+    expiring messages. Defaults to undefined/infinite.
 
 - Queue (string):
     Name of the queue to consume from, an empty string will have the broker
@@ -68,5 +90,6 @@ Example (that sends log lines from the logger):
     [AMQPOutput]
     url = "amqp://guest:guest@rabbitmq/"
     exchange = "testout"
-    exchangeType = "fanout"
+    exchange_type = "fanout"
     message_matcher = 'Logger == "TestWebserver"'
+
