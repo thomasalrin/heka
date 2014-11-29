@@ -26,17 +26,6 @@ import (
 	"time"
 )
 
-// Append a field (with a name and a value) to a Buffer.
-func writeField(first bool, b *bytes.Buffer, name string, value string) {
-	if !first {
-		b.WriteString(`,`)
-	}
-	b.WriteString(`"`)
-	b.WriteString(name)
-	b.WriteString(`":`)
-	b.WriteString(value)
-}
-
 const lowerhex = "0123456789abcdef"
 
 func writeUTF16Escape(b *bytes.Buffer, c rune) {
@@ -94,22 +83,121 @@ func writeQuotedString(b *bytes.Buffer, str string) {
 
 }
 
+func writeField(first bool, b *bytes.Buffer, f *message.Field, raw bool) {
+	if !first {
+		b.WriteString(`,`)
+	}
+
+	writeQuotedString(b, f.GetName())
+	b.WriteString(`:`)
+
+	switch f.GetValueType() {
+	case message.Field_STRING:
+		values := f.GetValueString()
+		if len(values) > 1 {
+			b.WriteString(`[`)
+			for i, value := range values {
+				if raw {
+					b.WriteString(value)
+				} else {
+					writeQuotedString(b, value)
+				}
+				if i < len(values) - 1 {
+					b.WriteString(`,`)
+				}
+			}
+			b.WriteString(`]`)
+		} else {
+			if raw {
+				b.WriteString(values[0])
+			} else {
+				writeQuotedString(b, values[0])
+			}
+		}
+	case message.Field_BYTES:
+		values := f.GetValueBytes()
+		if len(values) > 1 {
+			b.WriteString(`[`)
+			for i, value := range values {
+				if raw {
+					b.WriteString(string(value))
+				} else {
+					writeQuotedString(b, base64.StdEncoding.EncodeToString(value))
+				}
+				if i < len(values) - 1 {
+					b.WriteString(`,`)
+				}
+			}
+			b.WriteString(`]`)
+		} else {
+			if raw {
+				b.WriteString(string(values[0]))
+			} else {
+				writeQuotedString(b, string(values[0]))
+			}
+		}
+	case message.Field_INTEGER:
+		values := f.GetValueInteger()
+		if len(values) > 1 {
+			b.WriteString(`[`)
+			for i, value := range values {
+				b.WriteString(strconv.FormatInt(value, 10))
+				if i < len(values) - 1 {
+					b.WriteString(`,`)
+				}
+			}
+			b.WriteString(`]`)
+		} else {
+			b.WriteString(strconv.FormatInt(values[0], 10))
+		}
+	case message.Field_DOUBLE:
+		values := f.GetValueDouble()
+		if len(values) > 1 {
+			b.WriteString(`[`)
+			for i, value := range values {
+				b.WriteString(strconv.FormatFloat(value, 'g', -1, 64))
+				if i < len(values) - 1 {
+					b.WriteString(`,`)
+				}
+			}
+			b.WriteString(`]`)
+		} else {
+			b.WriteString(strconv.FormatFloat(values[0], 'g', -1, 64))
+		}
+	case message.Field_BOOL:
+		values := f.GetValueBool()
+		if len(values) > 1 {
+			b.WriteString(`[`)
+			for i, value := range values {
+				b.WriteString(strconv.FormatBool(value))
+				if i < len(values) - 1 {
+					b.WriteString(`,`)
+				}
+			}
+			b.WriteString(`]`)
+		} else {
+			b.WriteString(strconv.FormatBool(values[0]))
+		}
+	}
+}
+
 func writeStringField(first bool, b *bytes.Buffer, name string, value string) {
 	if !first {
 		b.WriteString(`,`)
 	}
+
 	writeQuotedString(b, name)
 	b.WriteString(`:`)
 	writeQuotedString(b, value)
 }
 
-func writeRawField(first bool, b *bytes.Buffer, name string, value string) {
+func writeIntField(first bool, b *bytes.Buffer, name string, value int32) {
 	if !first {
 		b.WriteString(`,`)
 	}
 	writeQuotedString(b, name)
 	b.WriteString(`:`)
-	b.WriteString(value)
+	b.WriteString(strconv.Itoa(int(value)))
 }
 
 // Manually encodes the Heka message into an ElasticSearch friendly way.
@@ -198,18 +286,18 @@ func (e *ESJsonEncoder) Encode(pack *PipelinePack) (output []byte, err error) {
 		case "logger":
 			writeStringField(first, &buf, f, m.GetLogger())
 		case "severity":
-			writeRawField(first, &buf, f, strconv.Itoa(int(m.GetSeverity())))
+			writeIntField(first, &buf, f, m.GetSeverity())
 		case "payload":
 			writeStringField(first, &buf, f, m.GetPayload())
 		case "envversion":
-			writeRawField(first, &buf, f, strconv.Quote(m.GetEnvVersion()))
+			writeStringField(first, &buf, f, m.GetEnvVersion())
 		case "pid":
-			writeRawField(first, &buf, f, strconv.Itoa(int(m.GetPid())))
+			writeIntField(first, &buf, f, m.GetPid())
 		case "hostname":
 			writeStringField(first, &buf, f, m.GetHostname())
 		case "fields":
-			raw := false
 			for _, field := range m.Fields {
+				raw := false
 				if len(e.rawBytesFields) > 0 {
 					for _, raw_field_name := range e.rawBytesFields {
 						if *field.Name == raw_field_name {
@@ -217,29 +305,8 @@ func (e *ESJsonEncoder) Encode(pack *PipelinePack) (output []byte, err error) {
 						}
 					}
 				}
-				if raw {
-					data := field.GetValue().([]byte)[:]
-					writeField(first, &buf, *field.Name, string(data))
-					raw = false
-				} else {
-					switch field.GetValueType() {
-					case message.Field_STRING:
-						writeStringField(first, &buf, *field.Name, field.GetValue().(string))
-					case message.Field_BYTES:
-						data := field.GetValue().([]byte)[:]
-						writeStringField(first, &buf, *field.Name,
-							base64.StdEncoding.EncodeToString(data))
-					case message.Field_INTEGER:
-						writeRawField(first, &buf, *field.Name,
-							strconv.FormatInt(field.GetValue().(int64), 10))
-					case message.Field_DOUBLE:
-						writeRawField(first, &buf, *field.Name,
-							strconv.FormatFloat(field.GetValue().(float64), 'g', -1, 64))
-					case message.Field_BOOL:
-						writeRawField(first, &buf, *field.Name,
-							strconv.FormatBool(field.GetValue().(bool)))
-					}
-				}
+				writeField(first, &buf, field, raw)
+		 		first = false
 			}
 		default:
 			err = fmt.Errorf("Unable to find field: %s", f)
@@ -257,6 +324,9 @@ func (e *ESJsonEncoder) Encode(pack *PipelinePack) (output []byte, err error) {
 type ESLogstashV0Encoder struct {
 	rawBytesFields []string
 	coord          *ElasticSearchCoordinates
+	// Field names to include in ElasticSearch document for "clean" format.
+	fields         []string
+	useMessageType bool
 }
 
 type ESLogstashV0EncoderConfig struct {
@@ -265,6 +335,8 @@ type ESLogstashV0EncoderConfig struct {
 	Index string
 	// Name of the document type of the messages. Defaults to "message".
 	TypeName string `toml:"type_name"`
+	// Should the @type field match the index _type. Defaults to false.
+	UseMessageType bool `toml:"use_message_type"`
 	// Field names to include in ElasticSearch document.
 	Fields []string
 	// When formating the Index use the Timestamp from the Message instead of
@@ -277,17 +349,35 @@ type ESLogstashV0EncoderConfig struct {
 }
 
 func (e *ESLogstashV0Encoder) ConfigStruct() interface{} {
-	return &ESLogstashV0EncoderConfig{
+	config := &ESLogstashV0EncoderConfig{
 		Index:                "logstash-%{2006.01.02}",
 		TypeName:             "message",
+		UseMessageType:       false,
 		ESIndexFromTimestamp: false,
 		Id:                   "",
 	}
+
+	config.Fields = []string{
+		"Uuid",
+		"Timestamp",
+		"Type",
+		"Logger",
+		"Severity",
+		"Payload",
+		"EnvVersion",
+		"Pid",
+		"Hostname",
+		"Fields",
+	}
+
+	return config
 }
 
 func (e *ESLogstashV0Encoder) Init(config interface{}) (err error) {
 	conf := config.(*ESLogstashV0EncoderConfig)
 	e.rawBytesFields = conf.RawBytesFields
+	e.fields = conf.Fields
+	e.useMessageType = conf.UseMessageType
 	e.coord = &ElasticSearchCoordinates{
 		Index:                conf.Index,
 		Type:                 conf.TypeName,
@@ -304,55 +394,64 @@ func (e *ESLogstashV0Encoder) Encode(pack *PipelinePack) (output []byte, err err
 	buf.WriteByte(NEWLINE)
 	buf.WriteString(`{`)
 
-	writeStringField(true, &buf, `@uuid`, m.GetUuidString())
-	t := time.Unix(0, m.GetTimestamp()).UTC()
-	writeStringField(false, &buf, `@timestamp`, t.Format("2006-01-02T15:04:05.000Z"))
-	writeStringField(false, &buf, `@type`, m.GetType())
-	writeStringField(false, &buf, `@logger`, m.GetLogger())
-	writeRawField(false, &buf, `@severity`, strconv.Itoa(int(m.GetSeverity())))
-	writeStringField(false, &buf, `@message`, m.GetPayload())
-	writeRawField(false, &buf, `@envversion`, strconv.Quote(m.GetEnvVersion()))
-	writeRawField(false, &buf, `@pid`, strconv.Itoa(int(m.GetPid())))
-	writeStringField(false, &buf, `@source_host`, m.GetHostname())
-
-	buf.WriteString(`,"@fields":{`)
 	first := true
-	raw := false
-	for _, field := range m.Fields {
-		if len(e.rawBytesFields) > 0 {
-			for _, raw_field_name := range e.rawBytesFields {
-				if *field.Name == raw_field_name {
-					raw = true
+	for _, f := range e.fields {
+		switch strings.ToLower(f) {
+		case "uuid":
+			writeStringField(first, &buf, `@uuid`, m.GetUuidString())
+		case "timestamp":
+			t := time.Unix(0, m.GetTimestamp()).UTC()
+			writeStringField(first, &buf, `@timestamp`, t.Format("2006-01-02T15:04:05.000Z"))
+		case "type":
+			if e.useMessageType || len(e.coord.Type) < 1 {
+				writeStringField(first, &buf, `@type`, m.GetType())
+			} else {
+				var interpType string
+				interpType, err = interpolateFlag(e.coord, m, e.coord.Type)
+				if len(interpType) > 0 && err == nil {
+					writeStringField(first, &buf, `@type`, interpType)
+				} else {
+					// fall back on writing the uninterpolated string
+					writeStringField(first, &buf, `@type`, e.coord.Type)
 				}
 			}
-		}
-
-		if raw {
-			data := field.GetValue().([]byte)[:]
-			writeField(false, &buf, *field.Name, string(data))
-			raw = false
-		} else {
-			switch field.GetValueType() {
-			case message.Field_STRING:
-				writeStringField(first, &buf, *field.Name, field.GetValue().(string))
-			case message.Field_BYTES:
-				data := field.GetValue().([]byte)[:]
-				writeStringField(first, &buf, *field.Name,
-					base64.StdEncoding.EncodeToString(data))
-			case message.Field_INTEGER:
-				writeRawField(first, &buf, *field.Name,
-					strconv.FormatInt(field.GetValue().(int64), 10))
-			case message.Field_DOUBLE:
-				writeRawField(first, &buf, *field.Name,
-					strconv.FormatFloat(field.GetValue().(float64), 'g', -1, 64))
-			case message.Field_BOOL:
-				writeRawField(first, &buf, *field.Name,
-					strconv.FormatBool(field.GetValue().(bool)))
+		case "logger":
+			writeStringField(first, &buf, `@logger`, m.GetLogger())
+		case "severity":
+			writeIntField(first, &buf, `@severity`, m.GetSeverity())
+		case "payload":
+			writeStringField(first, &buf, `@message`, m.GetPayload())
+		case "envversion":
+			writeStringField(first, &buf, `@envversion`, m.GetEnvVersion())
+		case "pid":
+			writeIntField(first, &buf, `@pid`, m.GetPid())
+		case "hostname":
+			writeStringField(first, &buf, `@source_host`, m.GetHostname())
+		case "fields":
+			if !first {
+				buf.WriteString(`,`)
 			}
+			buf.WriteString(`"@fields":{`)
+			firstfield := true
+			for _, field := range m.Fields {
+				raw := false
+				if len(e.rawBytesFields) > 0 {
+					for _, raw_field_name := range e.rawBytesFields {
+						if *field.Name == raw_field_name {
+							raw = true
+						}
+					}
+				}
+				writeField(firstfield, &buf, field, raw)
+				firstfield = false
+			}
+			buf.WriteString(`}`) // end of fields
+		default:
+			err = fmt.Errorf("Unable to find field: %s", f)
+			return
 		}
 		first = false
 	}
-	buf.WriteString(`}`) // end of fields
 	buf.WriteString(`}`)
 	buf.WriteByte(NEWLINE)
 	return buf.Bytes(), err

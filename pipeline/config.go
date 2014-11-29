@@ -10,27 +10,40 @@
 # Contributor(s):
 #   Rob Miller (rmiller@mozilla.com)
 #   Mike Trinkala (trink@mozilla.com)
+#   Justin Judd (justin@justinjudd.org)
 #
 # ***** END LICENSE BLOCK *****/
 
 package pipeline
 
 import (
+	"bufio"
+	"bytes"
 	"code.google.com/p/go-uuid/uuid"
+	"errors"
 	"fmt"
 	"github.com/bbangert/toml"
+	"io"
+	"io/ioutil"
 	"log"
 	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"sync"
 	"time"
 )
 
-const HEKA_DAEMON = "hekad"
+const (
+	HEKA_DAEMON     = "hekad"
+	invalidEnvChars = "\n\r\t "
+)
 
-var AvailablePlugins = make(map[string]func() interface{})
+var (
+	invalidEnvPrefix     = []byte("%ENV[")
+	AvailablePlugins     = make(map[string]func() interface{})
+	ErrMissingCloseDelim = errors.New("Missing closing delimiter")
+	ErrInvalidChars      = errors.New("Invalid characters in environmental variable")
+)
 
 // Adds a plugin to the set of usable Heka plugins that can be referenced from
 // a Heka config file.
@@ -96,6 +109,16 @@ type WantsName interface {
 	SetName(name string)
 }
 
+// WantsPipelineConfig indicates that a plugin wants access to the
+// PipelineConfig before any methods on the plugin are called. This (and the
+// other `Wants*` interfaces) is a bit kludgey, but it will have to do until
+// we overhaul the config loading code to make all of the right components
+// automatically available to each plugin earlier in the life cycle, which
+// will involve small breaking changes to the core plugin APIs.
+type WantsPipelineConfig interface {
+	SetPipelineConfig(pConfig *PipelineConfig)
+}
+
 // Indicates a plug-in can handle being restart should it exit before
 // heka is shut-down.
 type Restarting interface {
@@ -106,14 +129,27 @@ type Restarting interface {
 }
 
 // Indicates a plug-in can stop without causing a heka shut-down
+// Callers should first check IsStoppable, and if it returns true, Unregister
+// should be called to remove it from Heka while running.
 type Stoppable interface {
-	// This function isn't called, the existence of the interface signals
-	// the plug-in can safely go away
-	IsStoppable()
+	IsStoppable() bool
+	Unregister(pConfig *PipelineConfig) error
+}
+
+type notStoppable struct{}
+
+func (s *notStoppable) IsStoppable() bool {
+	return false
+}
+
+func (s *notStoppable) Unregister(pConfig *PipelineConfig) error {
+	return nil
 }
 
 // Master config object encapsulating the entire heka/pipeline configuration.
 type PipelineConfig struct {
+	// Heka global values.
+	Globals *GlobalConfigStruct
 	// All running InputRunners, by name.
 	InputRunners map[string]InputRunner
 	// PluginWrappers that can create Input plugin objects.
@@ -163,6 +199,8 @@ type PipelineConfig struct {
 	inputsLock sync.Mutex
 	// Is freed when all Input runners have stopped.
 	inputsWg sync.WaitGroup
+	// Lock protecting access to running outputs so they can be removed safely
+	outputsLock sync.Mutex
 	// Internal reporting channel
 	reportRecycleChan chan *PipelinePack
 }
@@ -174,11 +212,7 @@ func NewPipelineConfig(globals *GlobalConfigStruct) (config *PipelineConfig) {
 	if globals == nil {
 		globals = DefaultGlobals()
 	}
-	globals.PipelineConfig = config
-	// Replace global `Globals` function w/ one that returns our values.
-	Globals = func() *GlobalConfigStruct {
-		return globals
-	}
+	config.Globals = globals
 	config.InputRunners = make(map[string]InputRunner)
 	config.inputWrappers = make(map[string]*PluginWrapper)
 	config.DecoderWrappers = make(map[string]*PluginWrapper)
@@ -188,7 +222,7 @@ func NewPipelineConfig(globals *GlobalConfigStruct) (config *PipelineConfig) {
 	config.OutputRunners = make(map[string]OutputRunner)
 	config.outputWrappers = make(map[string]*PluginWrapper)
 	config.allEncoders = make(map[string]Encoder)
-	config.router = NewMessageRouter()
+	config.router = NewMessageRouter(globals.PluginChanSize)
 	config.inputRecycleChan = make(chan *PipelinePack, globals.PoolSize)
 	config.injectRecycleChan = make(chan *PipelinePack, globals.PoolSize)
 	config.LogMsgs = make([]string, 0, 4)
@@ -204,7 +238,7 @@ func NewPipelineConfig(globals *GlobalConfigStruct) (config *PipelineConfig) {
 // objects they are holding. Returns a PipelinePack for injection into Heka
 // pipeline, or nil if the msgLoopCount is above the configured maximum.
 func (self *PipelineConfig) PipelinePack(msgLoopCount uint) *PipelinePack {
-	if msgLoopCount++; msgLoopCount > Globals().MaxMsgLoops {
+	if msgLoopCount++; msgLoopCount > self.Globals.MaxMsgLoops {
 		return nil
 	}
 	pack := <-self.injectRecycleChan
@@ -269,7 +303,8 @@ func (self *PipelineConfig) DecoderRunner(base_name, full_name string) (
 	var decoder Decoder
 	if decoder, ok = self.Decoder(base_name); ok {
 		pluginGlobals := new(PluginGlobals)
-		dRunner = NewDecoderRunner(full_name, decoder, pluginGlobals)
+		dRunner = NewDecoderRunner(full_name, decoder, pluginGlobals,
+			self.Globals.PluginChanSize)
 		self.allDecodersLock.Lock()
 		self.allDecoders = append(self.allDecoders, dRunner)
 		self.allDecodersLock.Unlock()
@@ -359,7 +394,7 @@ func (self *PipelineConfig) AddFilterRunner(fRunner FilterRunner) error {
 // MessageRouter which signals the filter to shutdown by closing the input
 // channel. Returns true if the filter was removed.
 func (self *PipelineConfig) RemoveFilterRunner(name string) bool {
-	if Globals().Stopping {
+	if self.Globals.IsShuttingDown() {
 		return false
 	}
 
@@ -373,7 +408,8 @@ func (self *PipelineConfig) RemoveFilterRunner(name string) bool {
 	return false
 }
 
-// Starts the provided InputRunner and adds it to the set of running Inputs.
+// AddInputRunner Starts the provided InputRunner and adds it to the set of
+// running Inputs.
 func (self *PipelineConfig) AddInputRunner(iRunner InputRunner, wrapper *PluginWrapper) error {
 	self.inputsLock.Lock()
 	defer self.inputsLock.Unlock()
@@ -389,6 +425,7 @@ func (self *PipelineConfig) AddInputRunner(iRunner InputRunner, wrapper *PluginW
 	return nil
 }
 
+// RemoveInputRunner unregisters the provided InputRunner, and stops it.
 func (self *PipelineConfig) RemoveInputRunner(iRunner InputRunner) {
 	self.inputsLock.Lock()
 	defer self.inputsLock.Unlock()
@@ -400,32 +437,17 @@ func (self *PipelineConfig) RemoveInputRunner(iRunner InputRunner) {
 	iRunner.Input().Stop()
 }
 
-// Deprecated.
-func GetHekaConfigDir(inPath string) string {
-	msg := ("`GetHekaConfigDir` is deprecated, please use `PrependBaseDir` or " +
-		"`PrependShareDir` instead.")
-	Globals().LogMessage("heka", msg)
-	return PrependBaseDir(inPath)
-}
-
-// Expects either an absolute or relative file path. If absolute, simply
-// returns the path unchanged. If relative, prepends
-// GlobalConfigStruct.BaseDir.
-func PrependBaseDir(path string) string {
-	if filepath.IsAbs(path) {
-		return path
+// RemoveOutputRunner unregisters the provided OutputRunner from heka, and
+// removes it's message matcher from the heka router.
+func (self *PipelineConfig) RemoveOutputRunner(oRunner OutputRunner) {
+	self.outputsLock.Lock()
+	defer self.outputsLock.Unlock()
+	name := oRunner.Name()
+	if _, ok := self.outputWrappers[name]; ok {
+		self.router.RemoveOutputMatcher() <- oRunner.MatchRunner()
+		delete(self.outputWrappers, name)
 	}
-	return filepath.Join(Globals().BaseDir, path)
-}
-
-// Expects either an absolute or relative file path. If absolute, simply
-// returns the path unchanged. If relative, prepends
-// GlobalConfigStruct.ShareDir.
-func PrependShareDir(path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(Globals().ShareDir, path)
+	delete(self.OutputRunners, name)
 }
 
 type ConfigFile PluginConfig
@@ -449,12 +471,14 @@ type RetryOptions struct {
 // Heka itself before the config is passed to the Plugin.Init method. Not all
 // options apply to all plugin types.
 type PluginGlobals struct {
-	Typ     string `toml:"type"`
-	Ticker  uint   `toml:"ticker_interval"`
-	Matcher string `toml:"message_matcher"` // Filter and Output only.
-	Signer  string `toml:"message_signer"`  // Filter and Output only.
-	Retries RetryOptions
-	Encoder string // Output only.
+	Typ        string `toml:"type"`
+	Ticker     uint   `toml:"ticker_interval"`
+	Matcher    string `toml:"message_matcher"` // Filter and Output only.
+	Signer     string `toml:"message_signer"`  // Filter and Output only.
+	Retries    RetryOptions
+	Encoder    string // Output only.
+	UseFraming *bool  `toml:"use_framing"` // Output only.
+	CanExit    *bool  `toml:"can_exit"`
 }
 
 // A helper object to support delayed plugin creation.
@@ -463,12 +487,14 @@ type PluginWrapper struct {
 	ConfigCreator   func() interface{}
 	PluginCreator   func() interface{}
 	CreateWithError func() (interface{}, error) // Replaced in tests.
+	pConfig         *PipelineConfig
 }
 
-func NewPluginWrapper(name string) (wrapper *PluginWrapper) {
+func NewPluginWrapper(name string, pConfig *PipelineConfig) (wrapper *PluginWrapper) {
 	wrapper = new(PluginWrapper)
 	wrapper.Name = name
 	wrapper.CreateWithError = wrapper.createWithError
+	wrapper.pConfig = pConfig
 	return
 }
 
@@ -485,6 +511,9 @@ func (self *PluginWrapper) createWithError() (plugin interface{}, err error) {
 	plugin = self.PluginCreator()
 	if wantsName, ok := plugin.(WantsName); ok {
 		wantsName.SetName(self.Name)
+	}
+	if wantsPConfig, ok := plugin.(WantsPipelineConfig); ok {
+		wantsPConfig.SetPipelineConfig(self.pConfig)
 	}
 	err = plugin.(Plugin).Init(self.ConfigCreator())
 	return
@@ -576,13 +605,21 @@ type ConfigSection struct {
 // other plugin types a plugin instance is created, configured, and wrapped
 // with an appropriate plugin runner.
 func (self *PipelineConfig) loadSection(section *ConfigSection) (err error) {
-	wrapper := NewPluginWrapper(section.name)
+	wrapper := NewPluginWrapper(section.name, self)
 	// Check for existence of plugin type in AvailablePlugins map happens in
 	// loadPluginGlobals, we shouldn't get here if it doesn't exist.
 	wrapper.PluginCreator = AvailablePlugins[section.globals.Typ]
 
-	// Create plugin, test config object generation.
+	// Create plugin instance.
 	plugin := wrapper.PluginCreator()
+
+	// Make PipelineConfig available to the plugin if it needs it.
+	wantsPConfig, ok := plugin.(WantsPipelineConfig)
+	if ok {
+		wantsPConfig.SetPipelineConfig(self)
+	}
+
+	// Test config object generation.
 	var config interface{}
 	if config, err = LoadConfigStruct(section.tomlSection, plugin); err != nil {
 		return fmt.Errorf("Can't load config for %s: %s", section.name, err)
@@ -635,7 +672,8 @@ func (self *PipelineConfig) loadSection(section *ConfigSection) (err error) {
 	}
 
 	// Filters and outputs have a few more config settings.
-	runner := NewFORunner(wrapper.Name, plugin.(Plugin), section.globals)
+	runner := NewFORunner(wrapper.Name, plugin.(Plugin), section.globals,
+		self.Globals.PluginChanSize)
 	runner.name = wrapper.Name
 
 	if section.globals.Ticker != 0 {
@@ -655,24 +693,56 @@ func (self *PipelineConfig) loadSection(section *ConfigSection) (err error) {
 		return fmt.Errorf("'%s' missing message matcher", wrapper.Name)
 	}
 
-	if matcher, err = NewMatchRunner(section.globals.Matcher,
-		section.globals.Signer, runner); err != nil {
+	matcher, err = NewMatchRunner(section.globals.Matcher, section.globals.Signer,
+		runner, self.Globals.PluginChanSize)
+	if err != nil {
 		return fmt.Errorf("Can't create message matcher for '%s': %s",
 			wrapper.Name, err)
 	}
 	runner.matcher = matcher
 
+	if section.globals.CanExit == nil {
+		canExit := getAttr(config, "CanExit", false)
+		switch canExit := canExit.(type) {
+		case bool:
+			section.globals.CanExit = &canExit
+		case *bool:
+			if canExit == nil {
+				b := false
+				canExit = &b
+			}
+			section.globals.CanExit = canExit
+		}
+	}
+	runner.canExit = *section.globals.CanExit
+
 	switch section.category {
 	case "Filter":
 		if matcher != nil {
-			self.router.fMatchers = append(self.router.fMatchers, matcher)
+			self.router.fMatcherMap[runner.name] = matcher
 		}
 		self.FilterRunners[runner.name] = runner
-		if _, ok := runner.plugin.(Stoppable); !ok {
-			self.filterWrappers[runner.name] = wrapper
-		}
+		self.filterWrappers[runner.name] = wrapper
 
 	case "Output":
+		// Check to see if default value for UseFraming is set if none was in
+		// the TOML.
+		if section.globals.UseFraming == nil {
+			useFraming := getAttr(config, "UseFraming", false)
+			// We might have a bool or a *bool, gotta check both cases.
+			switch useFraming := useFraming.(type) {
+			case bool:
+				section.globals.UseFraming = &useFraming
+			case *bool:
+				if useFraming == nil {
+					b := false
+					useFraming = &b
+				}
+				section.globals.UseFraming = useFraming
+			}
+		}
+		runner.useFraming = *section.globals.UseFraming
+
 		// Check to see if a default encoder is specified if none was in the
 		// TOML.
 		if section.globals.Encoder == "" {
@@ -690,8 +760,9 @@ func (self *PipelineConfig) loadSection(section *ConfigSection) (err error) {
 			runner.encoder = encoder
 		}
 		if matcher != nil {
-			self.router.oMatchers = append(self.router.oMatchers, matcher)
+			self.router.oMatcherMap[runner.name] = matcher
 		}
+
 		self.OutputRunners[runner.name] = runner
 		self.outputWrappers[runner.name] = wrapper
 	}
@@ -756,7 +827,12 @@ const protobufEncoderToml = `
 func (self *PipelineConfig) LoadFromConfigFile(filename string) (err error) {
 	var configFile ConfigFile
 
-	if _, err = toml.DecodeFile(filename, &configFile); err != nil {
+	contents, err := ReplaceEnvsFile(filename)
+	if err != nil {
+		return err
+	}
+
+	if _, err = toml.Decode(contents, &configFile); err != nil {
 		return fmt.Errorf("Error decoding config file: %s", err)
 	}
 
@@ -847,6 +923,24 @@ func (self *PipelineConfig) LoadFromConfigFile(filename string) (err error) {
 		}
 	}
 
+	multiDecoders := make([]multiDecoderNode, len(sectionsByCategory["MultiDecoder"]))
+	multiConfigs := make(map[string]*ConfigSection)
+
+	for i, section := range sectionsByCategory["MultiDecoder"] {
+
+		multiConfigs[section.name] = section
+
+		multiDecoders[i] = newMultiDecoderNode(section.name, subsFromSection(section.tomlSection))
+
+	}
+	multiDecoders, err = orderDependencies(multiDecoders)
+	if err != nil {
+		return err
+	}
+	for i, d := range multiDecoders {
+		sectionsByCategory["MultiDecoder"][i] = multiConfigs[d.name]
+	}
+
 	// Append MultiDecoders to the end of the Decoders list.
 	sectionsByCategory["Decoder"] = append(sectionsByCategory["Decoder"],
 		sectionsByCategory["MultiDecoder"]...)
@@ -870,4 +964,94 @@ func (self *PipelineConfig) LoadFromConfigFile(filename string) (err error) {
 	}
 
 	return
+}
+
+func subsFromSection(section toml.Primitive) []string {
+	secMap := section.(map[string]interface{})
+	var subs []string
+	if _, ok := secMap["subs"]; ok {
+		subsUntyped, _ := secMap["subs"].([]interface{})
+		subs = make([]string, len(subsUntyped))
+		for i, subUntyped := range subsUntyped {
+			subs[i], _ = subUntyped.(string)
+		}
+	}
+	return subs
+}
+
+func ReplaceEnvsFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	r, err := EnvSub(file)
+	if err != nil {
+		return "", err
+	}
+	contents, err := ioutil.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	return string(contents), nil
+}
+
+func EnvSub(r io.Reader) (io.Reader, error) {
+	bufIn := bufio.NewReader(r)
+	bufOut := new(bytes.Buffer)
+	for {
+		chunk, err := bufIn.ReadBytes(byte('%'))
+		if err != nil {
+			if err == io.EOF {
+				// We're done.
+				bufOut.Write(chunk)
+				break
+			}
+			return nil, err
+		}
+		bufOut.Write(chunk[:len(chunk)-1])
+
+		tmp := make([]byte, 4)
+		tmp, err = bufIn.Peek(4)
+		if err != nil {
+			if err == io.EOF {
+				// End of file, write the last few bytes out and exit.
+				bufOut.WriteRune('%')
+				bufOut.Write(tmp)
+				break
+			}
+			return nil, err
+		}
+
+		if string(tmp) == "ENV[" {
+			// Found opening delimiter, advance the read cursor and look for
+			// closing delimiter.
+			tmp, err = bufIn.ReadBytes(byte('['))
+			if err != nil {
+				// This shouldn't happen, since the Peek succeeded.
+				return nil, err
+			}
+			chunk, err = bufIn.ReadBytes(byte(']'))
+			if err != nil {
+				if err == io.EOF {
+					// No closing delimiter, return an error
+					return nil, ErrMissingCloseDelim
+				}
+				return nil, err
+			}
+			// `chunk` is now holding var name + closing delimiter.
+			// var name contains invalid characters, return an error
+			if bytes.IndexAny(chunk, invalidEnvChars) != -1 ||
+				bytes.Index(chunk, invalidEnvPrefix) != -1 {
+				return nil, ErrInvalidChars
+			}
+			varName := string(chunk[:len(chunk)-1])
+			varVal := os.Getenv(varName)
+			bufOut.WriteString(varVal)
+		} else {
+			// Just a random '%', not an opening delimiter, write it out and
+			// keep going.
+			bufOut.WriteRune('%')
+		}
+	}
+	return bufOut, nil
 }

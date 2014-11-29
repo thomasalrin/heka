@@ -44,9 +44,9 @@ type SandboxEncoder struct {
 	tz                     *time.Location
 	sampleDenominator      int
 	output                 []byte
-	generatesProtobuf      bool
 	injected               bool
 	cEncoder               *client.ProtobufEncoder
+	pConfig                *pipeline.PipelineConfig
 }
 
 // This duplicates most of the SandboxConfig just so we can add a single
@@ -62,12 +62,17 @@ type SandboxEncoderConfig struct {
 	OutputLimit      uint   `toml:"output_limit"`
 	Profile          bool
 	Config           map[string]interface{}
-	EmitsProtobuf    bool `toml:"emits_protobuf"`
+}
+
+// Heka will call this before calling any other methods to give us access to
+// the pipeline configuration.
+func (s *SandboxEncoder) SetPipelineConfig(pConfig *pipeline.PipelineConfig) {
+	s.pConfig = pConfig
 }
 
 func (s *SandboxEncoder) ConfigStruct() interface{} {
 	return &SandboxEncoderConfig{
-		ModuleDirectory:  pipeline.PrependShareDir("lua_modules"),
+		ModuleDirectory:  s.pConfig.Globals.PrependShareDir("lua_modules"),
 		MemoryLimit:      8 * 1024 * 1024,
 		InstructionLimit: 1e6,
 		OutputLimit:      63 * 1024,
@@ -83,7 +88,6 @@ func (s *SandboxEncoder) SetName(name string) {
 
 func (s *SandboxEncoder) Init(config interface{}) (err error) {
 	conf := config.(*SandboxEncoderConfig)
-	s.generatesProtobuf = conf.EmitsProtobuf
 	s.sbc = &sandbox.SandboxConfig{
 		ScriptType:       conf.ScriptType,
 		ScriptFilename:   conf.ScriptFilename,
@@ -95,8 +99,9 @@ func (s *SandboxEncoder) Init(config interface{}) (err error) {
 		Profile:          conf.Profile,
 		Config:           conf.Config,
 	}
-	s.sbc.ScriptFilename = pipeline.PrependShareDir(s.sbc.ScriptFilename)
-	s.sampleDenominator = pipeline.Globals().SampleDenominator
+	globals := s.pConfig.Globals
+	s.sbc.ScriptFilename = globals.PrependShareDir(s.sbc.ScriptFilename)
+	s.sampleDenominator = globals.SampleDenominator
 
 	s.tz = time.UTC
 	if tz, ok := s.sbc.Config["tz"]; ok {
@@ -105,7 +110,7 @@ func (s *SandboxEncoder) Init(config interface{}) (err error) {
 		}
 	}
 
-	dataDir := pipeline.PrependBaseDir(sandbox.DATA_DIR)
+	dataDir := globals.PrependBaseDir(sandbox.DATA_DIR)
 	if !fileExists(dataDir) {
 		if err = os.MkdirAll(dataDir, 0700); err != nil {
 			return
@@ -135,14 +140,7 @@ func (s *SandboxEncoder) Init(config interface{}) (err error) {
 
 	s.sb.InjectMessage(func(payload, payload_type, payload_name string) int {
 		s.injected = true
-		if len(payload_type) == 0 { // Heka protobuf message.
-			e := client.CreateHekaStream([]byte(payload), &s.output, nil)
-			if e != nil {
-				return 1
-			}
-		} else {
-			s.output = []byte(payload)
-		}
+		s.output = []byte(payload)
 		return 0
 	})
 	s.sample = true
@@ -178,8 +176,7 @@ func (s *SandboxEncoder) Encode(pack *pipeline.PipelinePack) (output []byte, err
 	if retval == 0 && !s.injected {
 		// `inject_message` was never called, protobuf encode the copy on write
 		// message.
-		err = s.cEncoder.EncodeMessageStream(cowpack.Message, &s.output)
-		if err != nil {
+		if s.output, err = s.cEncoder.EncodeMessage(cowpack.Message); err != nil {
 			return
 		}
 	}
@@ -197,16 +194,16 @@ func (s *SandboxEncoder) Encode(pack *pipeline.PipelinePack) (output []byte, err
 		err = fmt.Errorf("FATAL: %s", s.sb.LastError())
 		return
 	}
+	if retval == -2 {
+		// Encoder has nothing to return.
+		return nil, nil
+	}
 	if retval < 0 {
 		atomic.AddInt64(&s.processMessageFailures, 1)
 		err = errors.New("Failed serializing.")
 		return
 	}
 	return s.output, nil
-}
-
-func (s *SandboxEncoder) GeneratesProtobuf() bool {
-	return s.generatesProtobuf
 }
 
 // Satisfies the `pipeline.ReportingPlugin` interface to provide sandbox state

@@ -15,12 +15,12 @@
 package statsd
 
 import (
-	"code.google.com/p/gomock/gomock"
 	"fmt"
 	. "github.com/mozilla-services/heka/pipeline"
 	pipeline_ts "github.com/mozilla-services/heka/pipeline/testsupport"
 	. "github.com/mozilla-services/heka/pipelinemock"
 	plugins_ts "github.com/mozilla-services/heka/plugins/testsupport"
+	"github.com/rafrombrc/gomock/gomock"
 	gs "github.com/rafrombrc/gospec/src/gospec"
 	"strconv"
 	"sync"
@@ -93,6 +93,13 @@ func TestParseMessage(t *testing.T) {
 		// without sample rate ----------------------------------
 
 		"sample.gauge:123|g": []Stat{{
+			"sample.gauge",
+			"123",
+			"g",
+			float32(1),
+		}},
+
+		" \tsample.gauge:123|g\n": []Stat{{
 			"sample.gauge",
 			"123",
 			"g",

@@ -16,7 +16,7 @@
 package pipeline
 
 import (
-	"code.google.com/p/goprotobuf/proto"
+	"code.google.com/p/gogoprotobuf/proto"
 	"github.com/mozilla-services/heka/client"
 	"github.com/mozilla-services/heka/message"
 	"math/rand"
@@ -31,14 +31,21 @@ type ProtobufDecoder struct {
 	processMessageFailures int64
 	processMessageSamples  int64
 	processMessageDuration int64
+	pConfig                *PipelineConfig
 	reportLock             sync.Mutex
 	sample                 bool
 	sampleDenominator      int
 }
 
+// Heka will call this before calling any other methods to give us access to
+// the pipeline configuration.
+func (p *ProtobufDecoder) SetPipelineConfig(pConfig *PipelineConfig) {
+	p.pConfig = pConfig
+}
+
 func (p *ProtobufDecoder) Init(config interface{}) error {
 	p.sample = true
-	p.sampleDenominator = Globals().SampleDenominator
+	p.sampleDenominator = p.pConfig.Globals.SampleDenominator
 	return nil
 }
 
@@ -89,34 +96,29 @@ func (p *ProtobufDecoder) ReportMsg(msg *message.Message) error {
 	return nil
 }
 
-type ProtobufEncoderConfig struct {
-	IncludeFraming         bool `toml:"include_framing"`
-}
-
 // Encoder for converting Message objects into Protocol Buffer data.
 type ProtobufEncoder struct {
 	processMessageCount    int64
 	processMessageFailures int64
 	processMessageSamples  int64
 	processMessageDuration int64
+	pConfig                *PipelineConfig
 	cEncoder               *client.ProtobufEncoder
 	reportLock             sync.Mutex
 	sample                 bool
 	sampleDenominator      int
-	conf                   *ProtobufEncoderConfig
 }
 
-func (p *ProtobufEncoder) ConfigStruct() interface{} {
-  return &ProtobufEncoderConfig{
-    IncludeFraming: true,
-  }
+// Heka will call this before calling any other methods to give us access to
+// the pipeline configuration.
+func (p *ProtobufEncoder) SetPipelineConfig(pConfig *PipelineConfig) {
+	p.pConfig = pConfig
 }
 
 func (p *ProtobufEncoder) Init(config interface{}) error {
 	p.cEncoder = client.NewProtobufEncoder(nil)
 	p.sample = true
-	p.sampleDenominator = Globals().SampleDenominator
-	p.conf = config.(*ProtobufEncoderConfig)
+	p.sampleDenominator = p.pConfig.Globals.SampleDenominator
 	return nil
 }
 
@@ -127,14 +129,8 @@ func (p *ProtobufEncoder) Encode(pack *PipelinePack) (output []byte, err error) 
 		startTime = time.Now()
 	}
 
-	if p.conf.IncludeFraming {
-		if err = p.cEncoder.EncodeMessageStream(pack.Message, &output); err != nil {
-			atomic.AddInt64(&p.processMessageFailures, 1)
-		}
-	} else {
-		if output, err = p.cEncoder.EncodeMessage(pack.Message); err != nil {
-			atomic.AddInt64(&p.processMessageFailures, 1)
-		}
+	if output, err = p.cEncoder.EncodeMessage(pack.Message); err != nil {
+		atomic.AddInt64(&p.processMessageFailures, 1)
 	}
 
 	if p.sample {
@@ -170,10 +166,6 @@ func (p *ProtobufEncoder) ReportMsg(msg *message.Message) error {
 	message.NewInt64Field(msg, "ProcessMessageAvgDuration", tmp, "ns")
 
 	return nil
-}
-
-func (p *ProtobufEncoder) GeneratesProtobuf() bool {
-	return true
 }
 
 func init() {

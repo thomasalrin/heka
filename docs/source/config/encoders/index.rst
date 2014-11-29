@@ -15,6 +15,17 @@ Alert Encoder
    :start-after: --[[
    :end-before: --]]
 
+.. _config_cbuf_librato_encoder:
+
+CBUF Librato Encoder
+====================
+
+.. versionadded:: 0.8
+
+.. include:: /../../sandbox/lua/encoders/cbuf_librato.lua
+   :start-after: --[[
+   :end-before: --]]
+
 .. _config_esjsonencoder:
 .. include:: /config/encoders/esjson.rst
 
@@ -36,5 +47,30 @@ ESPayloadEncoder
 .. _config_protobufencoder:
 .. include:: /config/encoders/protobuf.rst
 
+.. _config_rstencoder:
+.. include:: /config/encoders/rst.rst
+
 .. _config_sandboxencoder:
 .. include:: /config/encoders/sandbox.rst
+
+.. _config_schema_influx_encoder:
+
+Schema InfluxDB Encoder
+=======================
+
+.. versionadded:: 0.8
+
+.. include:: /../../sandbox/lua/encoders/schema_influx.lua
+	:start-after: --[=[
+	:end-before: --]=]
+
+.. _config_statmetric_influx:
+
+StatMetric InfluxDB Encoder
+===========================
+
+.. versionadded:: 0.7
+
+.. include:: /../../sandbox/lua/encoders/statmetric_influx.lua
+	:start-after: --[=[
+	:end-before: --]=]

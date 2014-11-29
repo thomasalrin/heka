@@ -9,6 +9,7 @@
 #
 # Contributor(s):
 #   Rob Miller (rmiller@mozilla.com)
+#   Justin Judd (justin@justinjudd.org)
 #
 # ***** END LICENSE BLOCK *****/
 
@@ -25,6 +26,7 @@ import (
 	ts "github.com/mozilla-services/heka/plugins/testsupport"
 	_ "github.com/mozilla-services/heka/plugins/udp"
 	gs "github.com/rafrombrc/gospec/src/gospec"
+	"os"
 	"path/filepath"
 	"runtime"
 )
@@ -54,16 +56,14 @@ func (o *DefaultsTestOutput) Run(fr FilterRunner, h PluginHelper) (err error) {
 }
 
 func LoadFromConfigSpec(c gs.Context) {
-	origGlobals := Globals
-
 	origAvailablePlugins := make(map[string]func() interface{})
 	for k, v := range AvailablePlugins {
 		origAvailablePlugins[k] = v
 	}
 
 	pipeConfig := NewPipelineConfig(nil)
+
 	defer func() {
-		Globals = origGlobals
 		AvailablePlugins = origAvailablePlugins
 	}()
 
@@ -107,6 +107,30 @@ func LoadFromConfigSpec(c gs.Context) {
 			udp.Input().Stop()
 		})
 
+		c.Specify("works with env variables in config file", func() {
+			err := os.Setenv("LOG_ENCODER", "PayloadEncoder")
+			defer os.Setenv("LOG_ENCODER", "")
+			c.Assume(err, gs.IsNil)
+			err = pipeConfig.LoadFromConfigFile("./testsupport/config_env_test.toml")
+			c.Assume(err, gs.IsNil)
+
+			log, ok := pipeConfig.OutputRunners["LogOutput"]
+			c.Expect(ok, gs.IsTrue)
+			var encoder Encoder
+			encoder = log.Encoder()
+			_, ok = encoder.(*PayloadEncoder)
+			c.Expect(ok, gs.IsTrue)
+		})
+
+		c.Specify("returns an error with invalid env variables in config", func() {
+			err := pipeConfig.LoadFromConfigFile("./testsupport/bad_envs/config_1_test.toml")
+			c.Expect(err, gs.Equals, ErrMissingCloseDelim)
+
+			err = pipeConfig.LoadFromConfigFile("./testsupport/bad_envs/config_2_test.toml")
+			c.Expect(err, gs.Equals, ErrInvalidChars)
+
+		})
+
 		c.Specify("works w/ decoder defaults", func() {
 			err := pipeConfig.LoadFromConfigFile("./testsupport/config_test_defaults.toml")
 			c.Assume(err, gs.Not(gs.IsNil))
@@ -131,6 +155,35 @@ func LoadFromConfigSpec(c gs.Context) {
 				}
 			}
 			c.Assume(hasSyncDecoder, gs.IsTrue)
+		})
+
+		c.Specify("works w/ Nested MultiDecoders", func() {
+			err := pipeConfig.LoadFromConfigFile("./testsupport/config_test_multidecoder_nested.toml")
+			c.Assume(err, gs.IsNil)
+			hasSyncDecoder := false
+
+			// ProtobufDecoder will always be loaded
+			c.Assume(len(pipeConfig.DecoderWrappers), gs.Equals, 5)
+
+			// Check that the MultiDecoder actually loaded
+			for k, _ := range pipeConfig.DecoderWrappers {
+				if k == "syncdecoder" {
+					hasSyncDecoder = true
+					break
+				}
+			}
+			c.Assume(hasSyncDecoder, gs.IsTrue)
+		})
+
+		c.Specify("handles Cyclic Nested MultiDecoders correctly", func() {
+			err := pipeConfig.LoadFromConfigFile("./testsupport/config_test_multidecoder_nested_cyclic.toml")
+			//circular dependency detected
+			c.Assume(err, gs.Not(gs.IsNil))
+			c.Expect(err.Error(), ts.StringContains, "circular dependency detected")
+
+			// ProtobufDecoder will always be loaded
+			c.Assume(len(pipeConfig.DecoderWrappers), gs.Equals, 0)
+
 		})
 
 		c.Specify("explodes w/ bad config file", func() {
@@ -266,35 +319,52 @@ NONE
 	})
 
 	c.Specify("Config directory helpers", func() {
-		Globals().BaseDir = "/base/dir"
-		Globals().ShareDir = "/share/dir"
+		globals := pipeConfig.Globals
+		globals.BaseDir = "/base/dir"
+		globals.ShareDir = "/share/dir"
 
 		c.Specify("PrependBaseDir", func() {
 			c.Specify("prepends for relative paths", func() {
 				dir := filepath.FromSlash("relative/path")
-				result := PrependBaseDir(dir)
+				result := globals.PrependBaseDir(dir)
 				c.Expect(result, gs.Equals, filepath.FromSlash("/base/dir/relative/path"))
 			})
 
 			c.Specify("doesn't prepend for absolute paths", func() {
 				dir := filepath.FromSlash("/absolute/path")
-				result := PrependBaseDir(dir)
+				result := globals.PrependBaseDir(dir)
 				c.Expect(result, gs.Equals, dir)
 			})
+
+			if runtime.GOOS == "windows" {
+				c.Specify("doesn't prepend for absolute paths with volume", func() {
+					dir := "c:\\absolute\\path"
+					result := globals.PrependBaseDir(dir)
+					c.Expect(result, gs.Equals, dir)
+				})
+			}
 		})
 
 		c.Specify("PrependShareDir", func() {
 			c.Specify("prepends for relative paths", func() {
 				dir := filepath.FromSlash("relative/path")
-				result := PrependShareDir(dir)
+				result := globals.PrependShareDir(dir)
 				c.Expect(result, gs.Equals, filepath.FromSlash("/share/dir/relative/path"))
 			})
 
 			c.Specify("doesn't prepend for absolute paths", func() {
 				dir := filepath.FromSlash("/absolute/path")
-				result := PrependShareDir(dir)
+				result := globals.PrependShareDir(dir)
 				c.Expect(result, gs.Equals, dir)
 			})
+
+			if runtime.GOOS == "windows" {
+				c.Specify("doesn't prepend for absolute path with volume", func() {
+					dir := "c:\\absolute\\path"
+					result := globals.PrependShareDir(dir)
+					c.Expect(result, gs.Equals, dir)
+				})
+			}
 		})
 	})
 
@@ -322,10 +392,6 @@ NONE
 			// Try to stop dr2 again. Shouldn't fail, but ok should be false.
 			ok = pipeConfig.StopDecoderRunner(dr2)
 			c.Expect(ok, gs.IsFalse)
-
-			// Clean up our UdpInput.
-			udp, _ := pipeConfig.InputRunners["UdpInput"]
-			udp.Input().Stop()
 		})
 	})
 }

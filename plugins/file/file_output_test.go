@@ -16,15 +16,16 @@
 package file
 
 import (
-	"code.google.com/p/gomock/gomock"
 	"fmt"
 	. "github.com/mozilla-services/heka/pipeline"
 	pipeline_ts "github.com/mozilla-services/heka/pipeline/testsupport"
 	"github.com/mozilla-services/heka/plugins"
 	plugins_ts "github.com/mozilla-services/heka/plugins/testsupport"
+	"github.com/rafrombrc/gomock/gomock"
 	gs "github.com/rafrombrc/gospec/src/gospec"
 	"io/ioutil"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -34,7 +35,13 @@ import (
 func FileOutputSpec(c gs.Context) {
 	t := new(pipeline_ts.SimpleT)
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	tmpFileName := fmt.Sprintf("fileoutput-test-%d", time.Now().UnixNano())
+	tmpFilePath := filepath.Join(os.TempDir(), tmpFileName)
+
+	defer func() {
+		ctrl.Finish()
+		os.Remove(tmpFilePath)
+	}()
 
 	oth := plugins_ts.NewOutputTestHelper(ctrl)
 	var wg sync.WaitGroup
@@ -45,11 +52,7 @@ func FileOutputSpec(c gs.Context) {
 		fileOutput := new(FileOutput)
 		encoder := new(plugins.PayloadEncoder)
 		encoder.Init(encoder.ConfigStruct())
-		fileOutput.encoder = encoder
 
-		tmpFileName := fmt.Sprintf("fileoutput-test-%d", time.Now().UnixNano())
-		tmpFilePath := fmt.Sprint(os.TempDir(), string(os.PathSeparator),
-			tmpFileName)
 		config := fileOutput.ConfigStruct().(*FileOutputConfig)
 		config.Path = tmpFilePath
 
@@ -58,14 +61,58 @@ func FileOutputSpec(c gs.Context) {
 		pack.Message = msg
 		pack.Decoded = true
 
+		c.Specify("w/ ProtobufEncoder", func() {
+			encoder := new(ProtobufEncoder)
+			encoder.SetPipelineConfig(pConfig)
+			encoder.Init(nil)
+			oth.MockOutputRunner.EXPECT().Encoder().Return(encoder)
+
+			c.Specify("uses framing", func() {
+				oth.MockOutputRunner.EXPECT().SetUseFraming(true)
+				err := fileOutput.Init(config)
+				defer os.Remove(tmpFilePath)
+				c.Assume(err, gs.IsNil)
+				oth.MockOutputRunner.EXPECT().InChan().Return(inChan)
+				wg.Add(1)
+				go func() {
+					err = fileOutput.Run(oth.MockOutputRunner, oth.MockHelper)
+					c.Expect(err, gs.IsNil)
+					wg.Done()
+				}()
+				close(inChan)
+				wg.Wait()
+			})
+
+			c.Specify("but not if config says not to", func() {
+				useFraming := false
+				config.UseFraming = &useFraming
+				err := fileOutput.Init(config)
+				defer os.Remove(tmpFilePath)
+				c.Assume(err, gs.IsNil)
+				oth.MockOutputRunner.EXPECT().InChan().Return(inChan)
+				wg.Add(1)
+				go func() {
+					err = fileOutput.Run(oth.MockOutputRunner, oth.MockHelper)
+					c.Expect(err, gs.IsNil)
+					wg.Done()
+				}()
+				close(inChan)
+				wg.Wait()
+				// We should fail if SetUseFraming is called since we didn't
+				// EXPECT it.
+
+			})
+		})
+
 		c.Specify("processes incoming messages", func() {
 			err := fileOutput.Init(config)
-			defer os.Remove(tmpFilePath)
 			c.Assume(err, gs.IsNil)
+			fileOutput.file.Close()
 			// Save for comparison.
 			payload := fmt.Sprintf("%s\n", pack.Message.GetPayload())
 
 			oth.MockOutputRunner.EXPECT().InChan().Return(inChan)
+			oth.MockOutputRunner.EXPECT().Encode(pack).Return(encoder.Encode(pack))
 			wg.Add(1)
 			go fileOutput.receiver(oth.MockOutputRunner, &wg)
 			inChan <- pack
@@ -75,22 +122,12 @@ func FileOutputSpec(c gs.Context) {
 			c.Expect(string(outBatch), gs.Equals, payload)
 		})
 
-		c.Specify("Init halts if basedirectory is not writable", func() {
-			tmpdir := filepath.Join(os.TempDir(), "tmpdir")
-			err := os.MkdirAll(tmpdir, 0400)
-			c.Assume(err, gs.IsNil)
-			config.Path = tmpdir
-			err = fileOutput.Init(config)
-			c.Assume(err, gs.Not(gs.IsNil))
-		})
-
 		c.Specify("commits to a file", func() {
 			outStr := "Write me out to the log file"
 			outBytes := []byte(outStr)
 
 			c.Specify("with default settings", func() {
 				err := fileOutput.Init(config)
-				defer os.Remove(tmpFilePath)
 				c.Assume(err, gs.IsNil)
 
 				// Start committer loop
@@ -120,7 +157,6 @@ func FileOutputSpec(c gs.Context) {
 			c.Specify("with different Perm settings", func() {
 				config.Perm = "600"
 				err := fileOutput.Init(config)
-				defer os.Remove(tmpFilePath)
 				c.Assume(err, gs.IsNil)
 
 				// Start committer loop
@@ -154,17 +190,32 @@ func FileOutputSpec(c gs.Context) {
 			})
 		})
 
-		c.Specify("honors folder_perm setting", func() {
-			config.FolderPerm = "750"
-			config.Path = filepath.Join(tmpFilePath, "subfile")
-			err := fileOutput.Init(config)
-			defer os.Remove(config.Path)
-			c.Assume(err, gs.IsNil)
+		if runtime.GOOS != "windows" {
+			if u, err := user.Current(); err != nil && u.Uid != "0" {
+				c.Specify("Init halts if basedirectory is not writable", func() {
+					tmpdir := filepath.Join(os.TempDir(), "tmpdir")
+					err := os.MkdirAll(tmpdir, 0400)
+					c.Assume(err, gs.IsNil)
+					config.Path = filepath.Join(tmpdir, "out.txt")
+					err = fileOutput.Init(config)
+					c.Assume(err, gs.Not(gs.IsNil))
+					os.RemoveAll(tmpdir)
+				})
+			}
 
-			fi, err := os.Stat(tmpFilePath)
-			c.Expect(fi.IsDir(), gs.IsTrue)
-			c.Expect(fi.Mode().Perm(), gs.Equals, os.FileMode(0750))
-		})
+			c.Specify("honors folder_perm setting", func() {
+				config.FolderPerm = "750"
+				subdir := filepath.Join(os.TempDir(), "subdir")
+				config.Path = filepath.Join(subdir, "out.txt")
+				err := fileOutput.Init(config)
+				defer os.RemoveAll(subdir)
+				c.Assume(err, gs.IsNil)
+
+				fi, err := os.Stat(subdir)
+				c.Expect(fi.IsDir(), gs.IsTrue)
+				c.Expect(fi.Mode().Perm(), gs.Equals, os.FileMode(0750))
+			})
+		}
 
 		c.Specify("that starts receiving w/ a flush interval", func() {
 			config.FlushInterval = 100000000 // We'll trigger the timer manually.
@@ -180,17 +231,19 @@ func FileOutputSpec(c gs.Context) {
 				err := fileOutput.Init(config)
 				c.Assume(err, gs.IsNil)
 				wg.Add(1)
-				go fileOutput.receiver(oth.MockOutputRunner, &wg)
-				runtime.Gosched() // Yield so we can overwrite the timerChan.
 				fileOutput.timerChan = timerChan
+				go fileOutput.receiver(oth.MockOutputRunner, &wg)
+				runtime.Gosched() // Yield so receiver will start.
 			}
 
 			cleanUp := func() {
 				close(inChan)
+				fileOutput.file.Close()
 				wg.Done()
 			}
 
 			c.Specify("honors flush interval", func() {
+				oth.MockOutputRunner.EXPECT().Encode(pack).Return(encoder.Encode(pack))
 				recvWithConfig(config)
 				defer cleanUp()
 				inChan <- pack
@@ -208,6 +261,8 @@ func FileOutputSpec(c gs.Context) {
 			})
 
 			c.Specify("honors flush interval AND flush count", func() {
+				oth.MockOutputRunner.EXPECT().Encode(pack).Return(encoder.Encode(pack))
+				oth.MockOutputRunner.EXPECT().Encode(pack2).Return(encoder.Encode(pack2))
 				config.FlushCount = 2
 				recvWithConfig(config)
 				defer cleanUp()
@@ -236,6 +291,7 @@ func FileOutputSpec(c gs.Context) {
 			})
 
 			c.Specify("honors flush interval OR flush count", func() {
+				oth.MockOutputRunner.EXPECT().Encode(gomock.Any()).Return(encoder.Encode(pack))
 				config.FlushCount = 2
 				config.FlushOperator = "OR"
 				recvWithConfig(config)
@@ -258,6 +314,8 @@ func FileOutputSpec(c gs.Context) {
 				})
 
 				c.Specify("when count triggers first", func() {
+					out, err := encoder.Encode(pack2)
+					oth.MockOutputRunner.EXPECT().Encode(gomock.Any()).Return(out, err)
 					inChan <- pack2
 					runtime.Gosched()
 					select {

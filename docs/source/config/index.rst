@@ -60,7 +60,7 @@ likely stop accepting messages until the plugin resumes operation (this
 applies only to filters/output plugins).
 
 Plugins specify that they support restarting by implementing the Restarting
-interface (see :ref:`restarting_plugins`). Plugins supporting Restarting can
+interface (see :ref:`restarting_plugin`). Plugins supporting Restarting can
 have :ref:`their restarting behavior configured <configuring_restarting>`.
 
 An internal diagnostic runner runs every 30 seconds to sweep the packs used
@@ -128,7 +128,7 @@ Config:
     Base working directory Heka will use for persistent storage through
     process and server restarts. The hekad process must have read and write
     access to this directory. Defaults to `/var/cache/hekad` (or
-    `c:\var\cache\hekad` on Windows).
+    `c:\\var\\cache\\hekad` on Windows).
 
 - share_dir (string):
     Root path of Heka's "share directory", where Heka will expect to find
@@ -137,6 +137,7 @@ Config:
     `c:\\usr\\share\\heka` on Windows).
 
 .. versionadded:: 0.6
+
 - sample_denominator (int):
     Specifies the denominator of the sample rate Heka will use when computing
     the time required to perform certain operations, such as for the
@@ -145,6 +146,7 @@ Config:
     calculated for one message out of 1000.
 
 .. versionadded:: 0.6
+
 - pid_file (string):
     Optionally specify the location of a pidfile where the process id of
     the running hekad process will be written. The hekad process must have
@@ -180,7 +182,7 @@ Example hekad.toml file
     password = "smtp-pass"
     host = "mail.example.com:25"
     encoder = "AlertEncoder"
-    
+
     # User friendly formatting of alert messages
     [AlertEncoder]
     type = "SandboxEncoder"
@@ -218,9 +220,26 @@ Example hekad.toml file
 
 .. end-hekad-toml
 
-.. _configuring_restarting:
+Using Environment Variables
+===========================
+
+If you wish to use environmental variables in your config files as a way to
+configure values, you can simply use ``%ENV[VARIABLE_NAME]`` and the text will
+be replaced with the value of the environmental variable ``VARIABLE_NAME``.
+
+Example:
+
+.. code-block:: ini
+
+    [AMQPInput]
+    url = "amqp://%ENV[USER]:%ENV[PASSWORD]@rabbitmq/"
+    exchange = "testout"
+    exchangeType = "fanout"
+
 
 .. start-restarting
+
+.. _configuring_restarting:
 
 Configuring Restarting Behavior
 ===============================
@@ -249,23 +268,23 @@ Config:
     larger than the `max_delay`. Defaults to 250ms.
 - max_retries (int):
     Maximum amount of times to attempt restarting the plugin before giving up
-    and shutting down hekad. Use 0 for no retry attempt, and -1 to continue
+    and exiting the plugin. Use 0 for no retry attempt, and -1 to continue
     trying forever (note that this will cause hekad to halt possibly forever
-    if the plugin cannot be restarted).
+    if the plugin cannot be restarted). Defaults to -1.
 
-Example (UdpInput does not actually support nor need restarting, illustrative
-purposes only):
+Example:
 
 .. code-block:: ini
 
-    [UdpInput]
-    address = "127.0.0.1:4880"
-    parser_type = "message.proto"
-    decoder = "ProtobufDecoder"
+    [AMQPOutput]
+    url = "amqp://guest:guest@rabbitmq/"
+    exchange = "testout"
+    exchange_type = "fanout"
+    message_matcher = 'Logger == "TestWebserver"'
 
-    [UdpInput.retries]
-    max_delay = 30s
-    delay = 250ms
+    [AMQPOutput.retries]
+    max_delay = "30s"
+    delay = "250ms"
     max_retries = 5
 
 .. end-restarting

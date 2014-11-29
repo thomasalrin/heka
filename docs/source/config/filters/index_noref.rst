@@ -41,12 +41,37 @@ CBuf Delta Aggregator By Hostname
 
 .. include:: /config/filters/counter.rst
 
+Cpu Stats Filter
+================
+
+.. versionadded:: 0.7
+.. include:: /../../sandbox/lua/filters/loadavg.lua
+   :start-after: --[[
+   :end-before: --]]
+
+Disk Stats Filter
+=================
+
+.. versionadded:: 0.7
+.. include:: /../../sandbox/lua/filters/diskstats.lua
+   :start-after: --[[
+   :end-before: --]]
+
 Frequent Items
 ==============
 
 .. versionadded:: 0.5
 
 .. include:: /../../sandbox/lua/filters/frequent_items.lua
+   :start-after: --[[
+   :end-before: --]]
+
+Heka Memory Statistics
+======================
+
+.. versionadded:: 0.6
+
+.. include:: /../../sandbox/lua/filters/heka_memstat.lua
    :start-after: --[[
    :end-before: --]]
 
@@ -68,8 +93,45 @@ HTTP Status Graph
    :start-after: --[[
    :end-before: --]]
 
+Memory Stats Filter
+===================
+
+.. versionadded:: 0.7
+.. include:: /../../sandbox/lua/filters/memstats.lua
+   :start-after: --[[
+   :end-before: --]]
+
+MySQL Slow Query
+================
+
+.. versionadded:: 0.6
+
+.. include:: /../../sandbox/lua/filters/mysql_slow_query.lua
+   :start-after: --[[
+   :end-before: --]]
+
 .. include:: /config/filters/stat.rst
 
 .. include:: /config/filters/sandbox.rst
 
 .. include:: /config/filters/sandboxmanager.rst
+
+Stats Graph
+===========
+
+.. versionadded:: 0.7
+
+.. include:: /../../sandbox/lua/filters/stat_graph.lua
+   :start-after: --[[
+   :end-before: --]]
+
+
+Unique Items
+============
+
+.. versionadded:: 0.6
+
+.. include:: /../../sandbox/lua/filters/unique_items.lua
+   :start-after: --[[
+   :end-before: --]]
+
