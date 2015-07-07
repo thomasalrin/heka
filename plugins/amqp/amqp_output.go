@@ -16,9 +16,11 @@
 package amqp
 
 import (
+        "bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
+        "github.com/mozilla-services/heka/message"
 	. "github.com/mozilla-services/heka/pipeline"
 	"github.com/mozilla-services/heka/plugins/tcp"
 	"github.com/streadway/amqp"
@@ -136,8 +138,8 @@ func (ao *AMQPOutput) Init(config interface{}) (err error) {
 	ao.usageWg = usageWg
 	closeChan := make(chan *amqp.Error)
 	ao.closeChan = ch.NotifyClose(closeChan)
-+//Megam change
-+if !conf.Queue {
+//Megam change
+if !conf.Queue {
 	err = ch.ExchangeDeclare(conf.Exchange, conf.ExchangeType,
 		conf.ExchangeDurability, conf.ExchangeAutoDelete, false, false,
 		nil)
@@ -194,7 +196,7 @@ func (ao *AMQPOutput) Run(or OutputRunner, h PluginHelper) (err error) {
         var tlsConf *tls.Config = nil
 	if strings.HasPrefix(conf.URL, "amqps://") && &ao.config.Tls != nil {
 		if tlsConf, err := tcp.CreateGoTlsConfig(&ao.config.Tls); err != nil {
-                        fmt.Println("%v", tlsConf)
+                        fmt.Println("%v", tlsConf)                              //Error when remove this line tlsConf declared and not used
 			return fmt.Errorf("TLS init error: %s", err)
 		}
 	}
@@ -202,13 +204,9 @@ func (ao *AMQPOutput) Run(or OutputRunner, h PluginHelper) (err error) {
         var dialer = AMQPDialer{tlsConf}
 	ch, usageWg, connectionWg, err := amqpHub.GetChannel(conf.URL, dialer)
 	if err != nil {
-                fmt.Println("%v", connectionWg)
+                fmt.Println("%v", connectionWg)                                 //Error when remove this line
 		return errors.New("Failed to get channel.")
 	}
-                                fmt.Println("====================> Megam test start 11111==========================>")
-                                fmt.Printf("%v\n", pack.Message)
-                                fmt.Printf("%s\n", pack.Message.GetLogger())
-                                fmt.Printf("%v\n", conf.QueueDurability)
 
         err = ch.ExchangeDeclare(pack.Message.GetLogger(), conf.ExchangeType,
 		conf.ExchangeDurability, conf.ExchangeAutoDelete, false, false,
@@ -219,18 +217,25 @@ func (ao *AMQPOutput) Run(or OutputRunner, h PluginHelper) (err error) {
 	}
 
         decl_q, err := ch.QueueDeclare(pack.Message.GetLogger(), conf.QueueDurability, conf.QueueAutoDelete, conf.QueueExclusive, false, nil)
-        fmt.Println("%v", decl_q)
+        fmt.Printf("%v\n", decl_q)                                 //Error when remove this line
 	if err != nil {
 		usageWg.Done()
 		return errors.New("Failed to declare queue.")
 	}
-	err = ch.QueueBind(pack.Message.GetLogger(), conf.RoutingKey, pack.Message.GetLogger(), false, nil)
+fmt.Printf("===============> LOGGER 1111111111111111<=============\n")
+fmt.Printf("%s\n", pack.Message.GetLogger())
+fmt.Printf("%s\n", conf.RoutingKey)
+
+//Megam change
+//queue_name := pack.Message.GetLogger()
+	err = ch.QueueBind(pack.Message.GetLogger(), pack.Message.GetLogger(), pack.Message.GetLogger(), false, nil)
+	//err = ch.QueueBind(queue_name, queue_name, queue_name, false, nil)
 	if err != nil {
 		usageWg.Done()
 		return errors.New("Failed to bind queue.")
 	}
         }
-
+queue_name := pack.Message.GetLogger()
 			if outBytes, err = or.Encode(pack); err != nil {
 				or.LogError(fmt.Errorf("Error encoding message: %s", err))
 				pack.Recycle()
@@ -239,10 +244,7 @@ func (ao *AMQPOutput) Run(or OutputRunner, h PluginHelper) (err error) {
 				pack.Recycle()
 				continue
 			}
-                        fmt.Println("====================> Megam test start 22222222 ==========================>")
-                        fmt.Printf("%v\n", pack.Message)
-                                fmt.Printf("%s\n", pack.Message.GetLogger())
-                                fmt.Printf("%v\n", conf.QueueDurability)
+
 			pack.Recycle()
 			amqpMsg = amqp.Publishing{
 				DeliveryMode: persist,
@@ -250,8 +252,15 @@ func (ao *AMQPOutput) Run(or OutputRunner, h PluginHelper) (err error) {
 				ContentType:  conf.ContentType,
 				Body:         outBytes,
 			}
-			err = ao.ch.Publish(pack.Message.GetLogger(), conf.RoutingKey,
-				false, false, amqpMsg)
+
+fmt.Printf("===============> LOGGER 22222222222222 <=============\n")
+fmt.Printf("%s\n", pack.Message.GetLogger())
+fmt.Printf("%s\n", queue_name)
+fmt.Printf("%s\n", conf.RoutingKey)
+
+//Megam change
+			//err = ao.ch.Publish(pack.Message.GetLogger(), conf.RoutingKey, false, false, amqpMsg)
+			err = ao.ch.Publish(queue_name, queue_name, false, false, amqpMsg)
 			if err != nil {
 				ok = false
 			}
